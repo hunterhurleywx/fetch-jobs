@@ -1,5 +1,6 @@
 """Byte-range download of GFS / GEFS / ECMWF fields, cropped to the common grid and cached."""
 import json
+from datetime import datetime
 import os
 import threading
 import time
@@ -219,8 +220,10 @@ def get_gefs_member(init, fh, mem, specs=None):
 # ECMWF open data (JSON-lines .index)
 # ---------------------------------------------------------------------------
 def ec_base(init, fh, model):
-    if model in ("hres", "hres_snd"):
-        stream, typ = ("oper", "fc") if init.hour in (0, 12) else ("scda", "fc")
+    if model in ("hres", "hres_snd", "hres_x"):
+        # Cy50r1 (12 May 2026 06Z) moved the 06/18Z runs from "scda" into "oper"
+        post50r1 = init >= datetime(2026, 5, 12, 6)
+        stream, typ = ("oper", "fc") if (init.hour in (0, 12) or post50r1) else ("scda", "fc")
     else:
         stream, typ = "enfo", "ef"
     return (f"{EC_BUCKET}/{init:%Y%m%d}/{init:%H}z/ifs/0p25/{stream}/"

@@ -87,9 +87,9 @@ GFS_X_FIELDS = {"apcp": ("APCP", "surface", "acc0"), "acpcp": ("ACPCP", "surface
 GEFS_X_FIELDS_A = {"apcpb": ("APCP", "surface", "accb"), "u850": ("UGRD", "850 mb"), "v850": ("VGRD", "850 mb"),
                    "rh700": ("RH", "700 mb"), "rh500": ("RH", "500 mb")}
 GEFS_X_FIELDS_B = {"acpcpb": ("ACPCP", "surface", "accb")}
-EC_X_FIELDS = {"tp": ("tp", "sfc", None), "u850": ("u", "pl", "850"), "v850": ("v", "pl", "850"),
+EC_X_FIELDS = {"tp": ("tp", "sfc", None), "cp": ("cp", "sfc", None), "u850": ("u", "pl", "850"), "v850": ("v", "pl", "850"),
                "rh700": ("r", "pl", "700"), "rh500": ("r", "pl", "500")}
-OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp"}  # absent at some steps (e.g. f000)
+OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp", "cp"}  # cp: ECMWF open data from 20 Oct 2026  # absent at some steps (e.g. f000)
 
 MODELS = ["gfs", "gefs", "hres", "eps"]
 MODEL_LABELS = {"gfs": "GFS", "gefs": "GEFS", "hres": "ECMWF HRES", "eps": "ECMWF EPS", "blend": "Blend"}
