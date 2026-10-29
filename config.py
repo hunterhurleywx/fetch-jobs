@@ -77,6 +77,20 @@ EC_SND_FIELDS.update({
     "u10": ("10u", "sfc", None), "v10": ("10v", "sfc", None),
 })
 
+# ---------------------------------------------------------------------------
+# "Extras" for the convective-initiation layer (separate cache: <model>_x)
+#   NCEP accumulations: "acc0" = run total (0-fh), "accb" = shortest bucket ending at fh
+# ---------------------------------------------------------------------------
+GFS_X_FIELDS = {"apcp": ("APCP", "surface", "acc0"), "acpcp": ("ACPCP", "surface", "acc0"),
+                "u850": ("UGRD", "850 mb"), "v850": ("VGRD", "850 mb"),
+                "rh700": ("RH", "700 mb"), "rh500": ("RH", "500 mb")}
+GEFS_X_FIELDS_A = {"apcpb": ("APCP", "surface", "accb"), "u850": ("UGRD", "850 mb"), "v850": ("VGRD", "850 mb"),
+                   "rh700": ("RH", "700 mb"), "rh500": ("RH", "500 mb")}
+GEFS_X_FIELDS_B = {"acpcpb": ("ACPCP", "surface", "accb")}
+EC_X_FIELDS = {"tp": ("tp", "sfc", None), "u850": ("u", "pl", "850"), "v850": ("v", "pl", "850"),
+               "rh700": ("r", "pl", "700"), "rh500": ("r", "pl", "500")}
+OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp"}  # absent at some steps (e.g. f000)
+
 MODELS = ["gfs", "gefs", "hres", "eps"]
 MODEL_LABELS = {"gfs": "GFS", "gefs": "GEFS", "hres": "ECMWF HRES", "eps": "ECMWF EPS", "blend": "Blend"}
 GEFS_MEMBERS = ["c00"] + [f"p{i:02d}" for i in range(1, 31)]
@@ -91,7 +105,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "")
+    model = model.replace("_snd", "").replace("_x", "")
     if model == "gfs":
         return fh <= 384 and (fh <= 120 or fh % 3 == 0)
     if model == "gefs":

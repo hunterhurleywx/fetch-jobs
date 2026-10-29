@@ -11,7 +11,8 @@ import requests
 
 from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMBERS, GEFS_FIELDS_A,
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
-                    SND_LATS, SND_LONS)
+                    SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS,
+                    OPTIONAL_X)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
 
@@ -142,16 +143,34 @@ def ncep_ranges(idx_text, spec, fh):
     lines = [l.split(":") for l in idx_text.strip().split("\n")]
     offsets = [int(p[1]) for p in lines]
     fcst = "anl" if fh == 0 else f"{fh} hour fcst"
-    lookup = {}
+    lookup, acc0, accb = {}, {}, {}
     for i, p in enumerate(lines):
+        end = offsets[i + 1] - 1 if i + 1 < len(lines) else None
         if p[5] == fcst:
-            end = offsets[i + 1] - 1 if i + 1 < len(lines) else None
             lookup.setdefault((p[3], p[4]), (offsets[i], end))
+        elif p[5].endswith("acc fcst") and "-" in p[5]:
+            start = p[5].split("-")[0]
+            if start == "0":
+                acc0.setdefault((p[3], p[4]), (offsets[i], end))
+            if p[5].endswith(f"-{fh} hour acc fcst") and start.isdigit():
+                prev = accb.get((p[3], p[4]))
+                if prev is None or int(start) > prev[0]:  # shortest bucket ending at fh
+                    accb[(p[3], p[4])] = (int(start), offsets[i], end)
     wanted = []
-    for key, varlev in spec.items():
-        if varlev not in lookup or lookup[varlev][1] is None:
-            raise Missing(f"{varlev} f{fh}")
-        wanted.append((*lookup[varlev], key))
+    for key, sv in spec.items():
+        var, lev, kind = (sv + ("inst",))[:3]
+        if kind == "acc0":
+            hit = acc0.get((var, lev))
+        elif kind == "accb":
+            hit = accb.get((var, lev))
+            hit = hit[1:] if hit else None
+        else:
+            hit = lookup.get((var, lev))
+        if hit is None or hit[1] is None:
+            if key in OPTIONAL_X:
+                continue
+            raise Missing(f"{var} {lev} f{fh}")
+        wanted.append((*hit, key))
     return wanted
 
 
@@ -181,9 +200,15 @@ def get_gfs_snd(init, fh):
     return {"det": fetch_ranges(url, ncep_ranges(idx, GFS_SND_FIELDS, fh), grid="snd")}
 
 
-def get_gefs_member(init, fh, mem):
+def get_gfs_x(init, fh):
+    url = gfs_url(init, fh)
+    idx = http_get(url + ".idx").decode()
+    return {"det": fetch_ranges(url, ncep_ranges(idx, GFS_X_FIELDS, fh))}
+
+
+def get_gefs_member(init, fh, mem, specs=None):
     out = {}
-    for ab, spec in (("a", GEFS_FIELDS_A), ("b", GEFS_FIELDS_B)):
+    for ab, spec in specs or (("a", GEFS_FIELDS_A), ("b", GEFS_FIELDS_B)):
         url = gefs_url(init, fh, mem, ab)
         idx = http_get(url + ".idx").decode()
         out.update(fetch_ranges(url, ncep_ranges(idx, spec, fh)))
@@ -206,22 +231,25 @@ def get_ecmwf(init, fh, model, pool):
     """Returns {member: fields}. HRES -> {'det': ...}; EPS -> {'1'..'50': ...}."""
     base = ec_base(init, fh, model)
     rows = [json.loads(l) for l in http_get(base + ".index").decode().splitlines() if l.strip()]
-    spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS}.get(model, EC_FIELDS)
+    spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS, "hres_x": EC_X_FIELDS,
+            "eps_x": EC_X_FIELDS}.get(model, EC_FIELDS)
     grid = "snd" if model.endswith("_snd") else "main"
-    members = EPS_MEMBERS if model == "eps" else ["det"]
+    ens = model.startswith("eps")
+    members = EPS_MEMBERS if ens else ["det"]
     want = {}
     for r in rows:
-        if model == "eps" and r.get("type") != "pf":
+        if ens and r.get("type") != "pf":
             continue
-        mem = r.get("number", "det") if model == "eps" else "det"
+        mem = r.get("number", "det") if ens else "det"
         if mem not in members:
             continue
         for key, (param, levtype, lev) in spec.items():
             if r["param"] == param and r["levtype"] == levtype and r.get("levelist") == lev:
                 o = r["_offset"]
                 want.setdefault(mem, []).append((o, o + r["_length"] - 1, key))
+    need = len([k for k in spec if k not in OPTIONAL_X])
     for m in members:
-        if len(want.get(m, [])) != len(spec):
+        if len(want.get(m, [])) < need:
             raise Missing(f"{model} {init} f{fh} member {m} incomplete")
     futs = {m: pool.submit(fetch_ranges, base + ".grib2", want[m], grid) for m in members}
     return {m: f.result() for m, f in futs.items()}
@@ -239,7 +267,8 @@ def missing_marker(model, init, fh):
 
 
 def is_cached(model, init, fh):
-    members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS}.get(model, ["det"])
+    members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
+               "eps_x": EPS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)
@@ -274,6 +303,13 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             futs[ncep_pool.submit(get_gfs, init, fh)] = (model, init, fh, None)
         elif model == "gfs_snd":
             futs[ncep_pool.submit(get_gfs_snd, init, fh)] = (model, init, fh, None)
+        elif model == "gfs_x":
+            futs[ncep_pool.submit(get_gfs_x, init, fh)] = (model, init, fh, None)
+        elif model == "gefs_x":
+            for m in GEFS_MEMBERS:
+                if not os.path.exists(cache_path(model, init, fh, m)):
+                    futs[ncep_pool.submit(get_gefs_member, init, fh, m,
+                                          (("a", GEFS_X_FIELDS_A), ("b", GEFS_X_FIELDS_B)))] = (model, init, fh, m)
         elif model == "gefs":
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):
