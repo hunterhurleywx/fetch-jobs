@@ -9,8 +9,11 @@ import eccodes
 import numpy as np
 import requests
 
-from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EPS_MEMBERS, GEFS_FIELDS_A,
-                    GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GRID_LATS, GRID_LONS)
+from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMBERS, GEFS_FIELDS_A,
+                    GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
+                    SND_LATS, SND_LONS)
+
+GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
 
 GFS_BUCKET = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
 GEFS_BUCKET = "https://noaa-gefs-pds.s3.amazonaws.com"
@@ -60,13 +63,14 @@ def http_get(url, rng=None, max_tries=8):
 _grid_cache = {}
 
 
-def _grid_index(lat1, lon1, dlat, dlon, nj, ni, south_to_north):
-    """Row/col indices into the source grid for every common-grid point."""
-    key = (lat1, lon1, dlat, dlon, nj, ni, south_to_north)
+def _grid_index(lat1, lon1, dlat, dlon, nj, ni, south_to_north, grid="main"):
+    """Row/col indices into the source grid for every target-grid point."""
+    key = (lat1, lon1, dlat, dlon, nj, ni, south_to_north, grid)
     if key not in _grid_cache:
+        lats, lons = GRIDS[grid]
         sgn = 1 if south_to_north else -1
-        rows = np.rint((GRID_LATS - lat1) / (sgn * dlat)).astype(int)
-        cols = np.rint(((GRID_LONS - lon1) % 360) / dlon).astype(int) % ni
+        rows = np.rint((lats - lat1) / (sgn * dlat)).astype(int)
+        cols = np.rint(((lons - lon1) % 360) / dlon).astype(int) % ni
         assert rows.min() >= 0 and rows.max() < nj, "domain outside source grid"
         _grid_cache[key] = (rows, cols)
     return _grid_cache[key]
@@ -82,15 +86,15 @@ def init_decode_pool(n):
     DECODE_POOL = ProcessPoolExecutor(n)
 
 
-def decode_to_grid(buf):
-    """Decode one GRIB2 message (regular lat/lon) onto the common 0.5 deg grid."""
+def decode_to_grid(buf, grid="main"):
+    """Decode one GRIB2 message (regular lat/lon) onto a target grid ('main' 0.5, 'snd' 0.25 deg)."""
     if DECODE_POOL is not None:
-        return DECODE_POOL.submit(_decode, buf).result()
+        return DECODE_POOL.submit(_decode, buf, grid).result()
     with _decode_lock:
-        return _decode(buf)
+        return _decode(buf, grid)
 
 
-def _decode(buf):
+def _decode(buf, grid="main"):
     h = eccodes.codes_new_from_message(buf)
     try:
         ni, nj = eccodes.codes_get(h, "Ni"), eccodes.codes_get(h, "Nj")
@@ -104,7 +108,7 @@ def _decode(buf):
             vals[vals == eccodes.codes_get(h, "missingValue")] = np.nan
     finally:
         eccodes.codes_release(h)
-    rows, cols = _grid_index(lat1, lon1, dlat, dlon, nj, ni, s2n)
+    rows, cols = _grid_index(lat1, lon1, dlat, dlon, nj, ni, s2n, grid)
     return vals.reshape(nj, ni)[np.ix_(rows, cols)]
 
 
@@ -121,13 +125,13 @@ def _merge(ranges):
     return out
 
 
-def fetch_ranges(url, wanted):
+def fetch_ranges(url, wanted, grid="main"):
     """wanted: list of (start, end, key). Returns {key: grid array}."""
     fields = {}
     for start, end, parts in _merge(wanted):
         blob = http_get(url, (start, end))
         for s, e, key in parts:
-            fields[key] = decode_to_grid(blob[s - start:e - start + 1])
+            fields[key] = decode_to_grid(blob[s - start:e - start + 1], grid)
     return fields
 
 
@@ -170,6 +174,13 @@ def get_gfs(init, fh):
     return {"det": fetch_ranges(url, ncep_ranges(idx, spec, fh))}
 
 
+def get_gfs_snd(init, fh):
+    """Full GFS column (21 levels + surface) on the 0.25 deg sounding grid."""
+    url = gfs_url(init, fh)
+    idx = http_get(url + ".idx").decode()
+    return {"det": fetch_ranges(url, ncep_ranges(idx, GFS_SND_FIELDS, fh), grid="snd")}
+
+
 def get_gefs_member(init, fh, mem):
     out = {}
     for ab, spec in (("a", GEFS_FIELDS_A), ("b", GEFS_FIELDS_B)):
@@ -183,7 +194,7 @@ def get_gefs_member(init, fh, mem):
 # ECMWF open data (JSON-lines .index)
 # ---------------------------------------------------------------------------
 def ec_base(init, fh, model):
-    if model == "hres":
+    if model in ("hres", "hres_snd"):
         stream, typ = ("oper", "fc") if init.hour in (0, 12) else ("scda", "fc")
     else:
         stream, typ = "enfo", "ef"
@@ -195,7 +206,8 @@ def get_ecmwf(init, fh, model, pool):
     """Returns {member: fields}. HRES -> {'det': ...}; EPS -> {'1'..'50': ...}."""
     base = ec_base(init, fh, model)
     rows = [json.loads(l) for l in http_get(base + ".index").decode().splitlines() if l.strip()]
-    spec = EC_FIELDS_EPS if model == "eps" else EC_FIELDS
+    spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS}.get(model, EC_FIELDS)
+    grid = "snd" if model.endswith("_snd") else "main"
     members = EPS_MEMBERS if model == "eps" else ["det"]
     want = {}
     for r in rows:
@@ -211,7 +223,7 @@ def get_ecmwf(init, fh, model, pool):
     for m in members:
         if len(want.get(m, [])) != len(spec):
             raise Missing(f"{model} {init} f{fh} member {m} incomplete")
-    futs = {m: pool.submit(fetch_ranges, base + ".grib2", want[m]) for m in members}
+    futs = {m: pool.submit(fetch_ranges, base + ".grib2", want[m], grid) for m in members}
     return {m: f.result() for m, f in futs.items()}
 
 
@@ -227,7 +239,7 @@ def missing_marker(model, init, fh):
 
 
 def is_cached(model, init, fh):
-    members = {"gfs": ["det"], "hres": ["det"], "gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS}[model]
+    members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)
@@ -260,6 +272,8 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
     for model, init, fh in todo:
         if model == "gfs":
             futs[ncep_pool.submit(get_gfs, init, fh)] = (model, init, fh, None)
+        elif model == "gfs_snd":
+            futs[ncep_pool.submit(get_gfs_snd, init, fh)] = (model, init, fh, None)
         elif model == "gefs":
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):

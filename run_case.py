@@ -116,14 +116,19 @@ def main():
     ap.add_argument("date")
     ap.add_argument("--leads", type=int, nargs="+", default=[7, 6, 5])
     ap.add_argument("--no-plots", action="store_true")
+    ap.add_argument("--replot", action="store_true", help="redraw figures from saved results.npz")
     a = ap.parse_args()
     conv_day = datetime.strptime(a.date, "%Y-%m-%d")
     outdir = os.path.join(CASES_DIR, a.date, "output")
     os.makedirs(outdir, exist_ok=True)
     t0 = time.time()
-    res, valid, pools = compute(conv_day, a.leads)
-    np.savez_compressed(os.path.join(outdir, "results.npz"), **res)
-    print(f"scored in {time.time() - t0:.0f}s -> {outdir}")
+    if a.replot:
+        res = dict(np.load(os.path.join(outdir, "results.npz")))
+        valid, pools = case_setup(conv_day, a.leads)
+    else:
+        res, valid, pools = compute(conv_day, a.leads)
+        np.savez_compressed(os.path.join(outdir, "results.npz"), **res)
+        print(f"scored in {time.time() - t0:.0f}s -> {outdir}")
     if not a.no_plots:
         import plots
         t1 = time.time()

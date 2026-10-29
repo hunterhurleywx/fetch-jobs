@@ -16,7 +16,8 @@ from shapely.geometry import shape
 
 from config import CASES_DIR, GRID_LATS, GRID_LONS, MODEL_LABELS, MODELS, VIEWS
 
-LEVELS = [1, 5, 10, 25, 50, 75, 90, 100]
+# Contour breakpoints 2/5/10/25/50/75/90 (100 is only the top bound), warm single-hue fill
+LEVELS = [2, 5, 10, 25, 50, 75, 90, 100]
 CMAP = ListedColormap(["#fff3b0", "#fdd17a", "#f9a24d", "#ef6a32", "#d7301f", "#a50f15", "#5c0a0f"])
 NORM = BoundaryNorm(LEVELS, CMAP.N)
 PROJ = ccrs.LambertConformal(central_longitude=-96, standard_parallels=(33, 45))
@@ -114,7 +115,7 @@ def draw_reports(ax, rep, size=6):
     for typ, mk, col in (("wind", "o", "#1f5fd6"), ("hail", "o", "#1a9e3a"), ("tornado", "^", "#d00000")):
         d = rep[rep["type"].str.startswith(typ[:4])]
         ax.scatter(d["lon"], d["lat"], s=size if typ != "tornado" else size * 2.2, marker=mk, c=col,
-                   edgecolors="black" if typ == "tornado" else "none", linewidths=0.3,
+                   edgecolors="black", linewidths=0.3,
                    transform=PC, zorder=7, alpha=0.8)
 
 

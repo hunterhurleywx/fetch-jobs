@@ -56,6 +56,27 @@ EC_FIELDS = {
     "z700": ("gh", "pl", "700"), "t700": ("t", "pl", "700"), "w700": ("w", "pl", "700"),
 }
 
+# ---------------------------------------------------------------------------
+# Full-column "sounding" variants of the deterministic models (0.25 deg grid)
+# ---------------------------------------------------------------------------
+SND_LATS = np.arange(20.0, 55.0 + 0.01, 0.25)
+SND_LONS = np.arange(-130.0, -60.0 + 0.01, 0.25)
+GFS_SND_LEVELS = [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500,
+                  450, 400, 350, 300, 250, 200, 150, 100]
+EC_SND_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100]
+GFS_SND_FIELDS = {f"{k}{lev}": (v, f"{lev} mb") for lev in GFS_SND_LEVELS
+                  for k, v in (("z", "HGT"), ("t", "TMP"), ("q", "SPFH"), ("u", "UGRD"), ("v", "VGRD"), ("w", "VVEL"))}
+GFS_SND_FIELDS.update({
+    "sp": ("PRES", "surface"), "zs": ("HGT", "surface"), "t2m": ("TMP", "2 m above ground"),
+    "q2": ("SPFH", "2 m above ground"), "u10": ("UGRD", "10 m above ground"), "v10": ("VGRD", "10 m above ground"),
+})
+EC_SND_FIELDS = {f"{k}{lev}": (p, "pl", str(lev)) for lev in EC_SND_LEVELS
+                 for k, p in (("z", "gh"), ("t", "t"), ("q", "q"), ("u", "u"), ("v", "v"), ("w", "w"))}
+EC_SND_FIELDS.update({
+    "sp": ("sp", "sfc", None), "t2m": ("2t", "sfc", None), "d2m": ("2d", "sfc", None),
+    "u10": ("10u", "sfc", None), "v10": ("10v", "sfc", None),
+})
+
 MODELS = ["gfs", "gefs", "hres", "eps"]
 MODEL_LABELS = {"gfs": "GFS", "gefs": "GEFS", "hres": "ECMWF HRES", "eps": "ECMWF EPS", "blend": "Blend"}
 GEFS_MEMBERS = ["c00"] + [f"p{i:02d}" for i in range(1, 31)]
@@ -70,6 +91,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
+    model = model.replace("_snd", "")
     if model == "gfs":
         return fh <= 384 and (fh <= 120 or fh % 3 == 0)
     if model == "gefs":
