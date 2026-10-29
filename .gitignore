@@ -2,7 +2,6 @@
 /*
 !/.gitignore
 !/.github/
-!/README.md
 !/requirements.txt
 !/config.py
 !/fetch.py
