@@ -89,6 +89,8 @@ GEFS_X_FIELDS_A = {"apcpb": ("APCP", "surface", "accb"), "u850": ("UGRD", "850 m
 GEFS_X_FIELDS_B = {"acpcpb": ("ACPCP", "surface", "accb")}
 EC_X_FIELDS = {"tp": ("tp", "sfc", None), "cp": ("cp", "sfc", None), "u850": ("u", "pl", "850"), "v850": ("v", "pl", "850"),
                "rh700": ("r", "pl", "700"), "rh500": ("r", "pl", "500")}
+# EPS 500/700 hPa geopotential, fetched separately ("eps_z") when height maps are needed
+EC_Z_FIELDS = {"z500": ("gh", "pl", "500"), "z700": ("gh", "pl", "700")}
 OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp", "cp"}  # cp: ECMWF open data from 20 Oct 2026  # absent at some steps (e.g. f000)
 
 MODELS = ["gfs", "gefs", "hres", "eps"]
@@ -105,7 +107,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "").replace("_x", "")
+    model = model.replace("_snd", "").replace("_x", "").replace("_z", "")
     if model == "gfs":
         return fh <= 384 and (fh <= 120 or fh % 3 == 0)
     if model == "gefs":

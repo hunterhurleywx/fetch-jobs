@@ -24,7 +24,7 @@ from config import CASES_DIR
 
 SPC = "https://www.spc.noaa.gov"
 S = requests.Session()
-S.headers["User-Agent"] = "pogs-research (hunterlhurley case study)"
+S.headers["User-Agent"] = "fetch-jobs severe-weather research (github.com/hunterhurleywx/fetch-jobs)"
 HAZ = ("cat", "torn", "wind", "hail")
 
 
@@ -60,6 +60,22 @@ def save(out, name, url, payload, note, sources):
     sources.append([name, url, note])
 
 
+def normalize(geojson_text):
+    """SPC's raw .lyr.geojson -> the layout the readers use: properties["level"] = LABEL
+    ("0.15", "SLGT", "SIGN", ...), and drop the empty placeholder features SPC writes for "no area"."""
+    g = json.loads(geojson_text)
+    keep = []
+    for f in g.get("features", []):
+        p = f.get("properties", {})
+        lab = str(p.get("level", p.get("LABEL", ""))).strip()
+        if not lab or not f.get("geometry"):
+            continue
+        p["level"] = lab
+        keep.append(f)
+    g["features"] = keep
+    return json.dumps(g)
+
+
 def labels(geojson_text):
     try:
         feats = json.loads(geojson_text).get("features", [])
@@ -68,12 +84,21 @@ def labels(geojson_text):
     return ", ".join(str(f["properties"].get("LABEL")) for f in feats) or "no areas"
 
 
+WINTER_TIME = {"0730": "0830", "0600": "0700"}  # Day 3 / Day 2 issue an hour later (UTC) in standard time
+
+
 def otlk(out, sources, day, issue, hhmm, name_stem, kinds, page):
+    if day in (2, 3) and get(f"{SPC}/products/outlook/archive/{issue:%Y}/day{day}otlk_{issue:%Y%m%d}_{hhmm}_cat.lyr.geojson") is None \
+            and hhmm in WINTER_TIME:
+        alt = WINTER_TIME[hhmm]
+        page = page.replace(f"_{hhmm}.html", f"_{alt}.html")
+        hhmm = alt  # saved under the usual (summer-time) file names so the readers find it
     base = f"{SPC}/products/outlook/archive/{issue:%Y}/day{day}otlk_{issue:%Y%m%d}_{hhmm}"
     for k in kinds:
         url = f"{base}_{k}.lyr.geojson"
         r = get(url)
-        save(out, f"{name_stem}_{k}.geojson", url, r.text if r else None, labels(r.text) if r else "", sources)
+        save(out, f"{name_stem}_{k}.geojson", url, normalize(r.text) if r else None, labels(r.text) if r else "",
+             sources)
     save(out, f"{name_stem}.txt", page, pre_text(page), "discussion", sources)
 
 
@@ -108,7 +133,7 @@ def fetch_case(conv_day):
         issue = conv_day - timedelta(days=n - 1)
         url = f"{SPC}/products/exper/day4-8/archive/{issue:%Y}/day{n}prob_{issue:%Y%m%d}.lyr.geojson"
         r = get(url)
-        save(out, f"day{n}_issued_{issue:%Y%m%d}.geojson", url, r.text if r else None,
+        save(out, f"day{n}_issued_{issue:%Y%m%d}.geojson", url, normalize(r.text) if r else None,
              labels(r.text) if r else "", sources)
         page = f"{SPC}/products/exper/day4-8/archive/{issue:%Y}/day4-8_{issue:%Y%m%d}.html"
         save(out, f"day{n}_issued_{issue:%Y%m%d}.txt", page, pre_text(page), "Day 4-8 discussion", sources)
@@ -131,6 +156,25 @@ def fetch_case(conv_day):
           + (f", missing: {', '.join(missing)}" if missing else ""), flush=True)
 
 
+def renormalize_case(case):
+    """Fix geojson files saved before normalize() existed (no re-download)."""
+    d = os.path.join(CASES_DIR, case, "spc")
+    n = 0
+    for name in os.listdir(d):
+        if name.endswith(".geojson"):
+            p = os.path.join(d, name)
+            with open(p, encoding="utf-8") as fh:
+                txt = fh.read()
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(normalize(txt))
+            n += 1
+    print(f"{case}: normalized {n} geojson files")
+
+
 if __name__ == "__main__":
-    for arg in sys.argv[1:]:
-        fetch_case(date.fromisoformat(arg))
+    if sys.argv[1] == "--renormalize":
+        for arg in sys.argv[2:]:
+            renormalize_case(arg)
+    else:
+        for arg in sys.argv[1:]:
+            fetch_case(date.fromisoformat(arg))

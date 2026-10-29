@@ -17,7 +17,7 @@ import time
 
 from config import CACHE_DIR
 
-REPO = "hunterhurleywx/pogs-fetch"
+REPO = "hunterhurleywx/fetch-jobs"
 
 
 def gh(*args, capture=True):

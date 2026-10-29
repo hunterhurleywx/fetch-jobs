@@ -1,3 +1,21 @@
+# Only the cloud fetch/scoring pipeline is published; research and one-off scripts stay local.
+/*
+!/.gitignore
+!/.github/
+!/README.md
+!/requirements.txt
+!/config.py
+!/fetch.py
+!/download_case.py
+!/remote_fetch.py
+!/fetch_spc.py
+!/run_case.py
+!/scoring.py
+!/verify_case.py
+!/ci.py
+!/calibrate.py
+!/plots.py
+
 __pycache__/
 *.pyc
 cache/

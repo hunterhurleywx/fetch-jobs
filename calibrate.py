@@ -28,6 +28,7 @@ from config import CASES_DIR
 
 PRODUCTS = {"env": ("results.npz", "v2|{L}|blend|day"), "env_ci": ("ci_layers.npz", "{L}__env*ci")}
 SPC_LEVELS = [2, 5, 10, 15, 30, 45, 60, 100]
+TRAIN_NOTE = "active severe days only, likely biased high"
 SPC_CMAP = ListedColormap(["#fff3b0", "#fdd17a", "#f9a24d", "#ef6a32", "#d7301f", "#a50f15", "#5c0a0f"])
 
 
@@ -126,8 +127,7 @@ def plot_calibrated(case, prod, iso, view="conus", ntrain=3):
         ax.set_visible(False)
     name = {"env": "environment", "env_ci": "environment x initiation"}[prod]
     fig.suptitle(f"{case}: calibrated probability of severe within 25 mi ({name})\n"
-                 f"PROVISIONAL: logistic fit on {ntrain} active severe days (no quiet/bust days yet), likely biased high",
-                 fontsize=12)
+                 f"PROVISIONAL: logistic fit on {ntrain} case days ({TRAIN_NOTE})", fontsize=12)
     if cf is not None:
         cax = fig.add_axes([0.25, 0.04, 0.5, 0.015])
         fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=SPC_LEVELS[:-1]).set_label(
@@ -143,7 +143,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", nargs="+", required=True)
     ap.add_argument("--apply", nargs="*", default=[])
+    ap.add_argument("--note", default="active severe days only, likely biased high",
+                    help="what the training set is, shown on the maps")
     a = ap.parse_args()
+    global TRAIN_NOTE
+    TRAIN_NOTE = a.note
     store = {}
     for prod in PRODUCTS:
         t, bss = reliability(a.train, prod)
@@ -155,7 +159,7 @@ def main():
         for c in a.apply + a.train:
             print("  ", plot_calibrated(c, prod, iso, ntrain=len(a.train)))
     with open(os.path.join(CASES_DIR, "calibration_provisional.json"), "w") as f:
-        json.dump(dict(trained_on=a.train, note="logistic on logit(index), area-weighted; active severe days only", **store), f, indent=1)
+        json.dump(dict(trained_on=a.train, note=f"logistic on logit(index), area-weighted; {a.note}", **store), f, indent=1)
     for prod in PRODUCTS:
         m = dict(zip(store[prod]["index"], store[prod]["prob"]))
         print(f"{prod}: index 10/25/50/75 -> " + ", ".join(f"{100 * m[k]:.0f}%" for k in (0.1, 0.25, 0.5, 0.75)))
