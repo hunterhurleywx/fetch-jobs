@@ -93,17 +93,44 @@ def score_current(ing, fh):
 _LIFT_X = [-0.20, -0.08, -0.03, 0.00, 0.05, 0.20]
 _LIFT_Y = [1.10, 1.00, 0.80, 0.65, 0.50, 0.20]
 
+# Optional v2 profiles: background tools from the case diagnostics, not defaults.
+# research/05_case_2025-04-27/03_diagnosis.md and research/04_case_2025-06-16/03_diagnosis.md
+#   moist: (q2 lo, q2 hi) g/kg ramp; shear_hi: m/s for full credit; lift_neutral: score at w = 0
+PROFILES = {
+    "v2": dict(moist=(8.0, 13.0), shear_hi=20.0, lift_neutral=0.65),
+    "highplains": dict(moist=(6.0, 11.0), shear_hi=20.0, lift_neutral=0.65),  # dry, high-based setups
+    "shear30": dict(moist=(8.0, 13.0), shear_hi=30.0, lift_neutral=0.65),      # strongly sheared outbreaks
+    "liftstrong": dict(moist=(8.0, 13.0), shear_hi=20.0, lift_neutral=0.45),   # forcing-dominated days
+    "msl": dict(moist=(6.0, 11.0), shear_hi=30.0, lift_neutral=0.45),          # all three combined
+    # Warm-season MCS / damaging-wind pathway: weakly sheared, high-CAPE organised clusters
+    # (Evans & Doswell 2001). Scored in parallel; final = max(supercell path, MCS path).
+    "mcs": dict(moist=(8.0, 13.0), shear_hi=20.0, lift_neutral=0.65, mcs=(5.0, 12.0, 0.6)),
+    "msl_mcs": dict(moist=(6.0, 11.0), shear_hi=30.0, lift_neutral=0.45, mcs=(5.0, 12.0, 0.6)),
+}
+PROFILE = PROFILES["v2"]
+
+
+def set_profile(name):
+    global PROFILE
+    PROFILE = PROFILES[name]
+
 
 def score_v2(ing, fh, parts=False):
+    p = PROFILE
     cape = np.clip(np.nan_to_num(ing["cape_v2"], nan=0.0), 0, None)
     c_term = np.clip(cape / ing["cape_scale"], 0, 1) ** 0.6
     inst = np.clip(c_term * (1.0 + 0.5 * ramp(ing["lr75"], 6.0, 7.5)), 0, 1)
-    shear = ramp(ing["shear"], 10.0, 20.0)
+    shear = ramp(ing["shear"], 10.0, p["shear_hi"])
     omega = np.clip(gauss(ing["omega"], 150), -0.3, 0.3)
-    lift = np.interp(omega, _LIFT_X, _LIFT_Y)
+    ln = p["lift_neutral"]
+    lift = np.interp(omega, _LIFT_X, [1.10, 1.00, 0.80, ln, ln * 0.75, 0.20])
     cin = 1.0 if ing["cin_v2"] is None else ramp(200.0 + np.nan_to_num(ing["cin_v2"], nan=0.0), 0, 150)
-    moist = 0.5 + 0.5 * ramp(ing["q2"], 8.0, 13.0)
-    score = gauss(np.clip(inst * shear * lift * cin * moist, 0, 1), 100)
+    moist = 0.5 + 0.5 * ramp(ing["q2"], *p["moist"])
+    raw = inst * shear * lift * cin * moist
+    if "mcs" in p:
+        lo, hi, cap = p["mcs"]
+        raw = np.maximum(raw, cap * inst * ramp(ing["shear"], lo, hi) * lift * cin * moist)
+    score = gauss(np.clip(raw, 0, 1), 100)
     if parts:
         return score, {"inst": inst, "shear": shear, "lift": lift, "cin": cin, "moist": moist}
     return score
