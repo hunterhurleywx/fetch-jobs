@@ -219,6 +219,12 @@ def get_gefs_member(init, fh, mem, specs=None):
 # ---------------------------------------------------------------------------
 # ECMWF open data (JSON-lines .index)
 # ---------------------------------------------------------------------------
+# Open-data parameters that only exist from some date, and what to use before then.
+# "mucape" arrived with Cy49r1 (~12 Nov 2024); earlier files carry "cape" (param 59), which
+# ECMWF computes from the most unstable parcel departing below 350 hPa, so it's MU-type too.
+EC_ALIASES = {"mucape": "cape"}
+
+
 def ec_base(init, fh, model):
     if model in ("hres", "hres_snd", "hres_x"):
         # Cy50r1 (12 May 2026 06Z) moved the 06/18Z runs from "scda" into "oper"
@@ -236,6 +242,9 @@ def get_ecmwf(init, fh, model, pool):
     rows = [json.loads(l) for l in http_get(base + ".index").decode().splitlines() if l.strip()]
     spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS, "hres_x": EC_X_FIELDS,
             "eps_x": EC_X_FIELDS}.get(model, EC_FIELDS)
+    have = {r["param"] for r in rows}
+    spec = {k: ((EC_ALIASES[p] if p not in have and p in EC_ALIASES else p), lt, lv)
+            for k, (p, lt, lv) in spec.items()}
     grid = "snd" if model.endswith("_snd") else "main"
     ens = model.startswith("eps")
     members = EPS_MEMBERS if ens else ["det"]
