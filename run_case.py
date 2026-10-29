@@ -11,7 +11,7 @@ from datetime import datetime
 
 import numpy as np
 
-from config import CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, MODELS, case_setup, fh_available
+from config import CAM_MODELS, CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam_pools, case_setup, fh_available
 from fetch import cache_path
 import scoring
 
@@ -20,7 +20,7 @@ DIAG_KEYS = ("cape_v2", "shear", "omega", "lr75", "q2", "pwat", "z500")
 
 
 def members_of(model):
-    return {"gfs": ["det"], "hres": ["det"], "gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS}[model]
+    return {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS}.get(model, ["det"])  # deterministic: GFS, HRES, CAMs
 
 
 def load(model, init, fh, member):
@@ -72,7 +72,7 @@ def score_pool(model, inits, valid):
 def combine(lst, scheme, model):
     if not lst:
         return None
-    return scoring.pool_combine(np.stack(lst), scheme, model in ("gfs", "hres"))
+    return scoring.pool_combine(np.stack(lst), scheme, model not in ("gefs", "eps"))
 
 
 def compute(conv_day, leads, log=print):
@@ -81,9 +81,14 @@ def compute(conv_day, leads, log=print):
     for lead, inits in pools.items():
         log(f"Day {lead}: cycles {inits[0]:%m/%d %HZ} .. {inits[-1]:%m/%d %HZ}")
         by_model = {s: {"day": {}, "vt": {v: {} for v in valid}, "cyc": {i: {} for i in inits}} for s in SCHEMES}
-        for model in MODELS:
+        cams = cam_pools(conv_day, lead)
+        for model in MODELS + [m for m in CAM_MODELS if m in cams]:
             t0 = time.time()
-            out, diag = score_pool(model, inits, valid)
+            minits = cams.get(model, inits)
+            out, diag = score_pool(model, minits, valid)
+            if model in cams and not out["v2"]["day"]:
+                log(f"  {model:5s}    0 member-runs (not downloaded)")
+                continue
             for k, v in diag.items():
                 res[f"diag|{lead}|{model}|{k}"] = v
             for s in SCHEMES:
@@ -100,7 +105,7 @@ def compute(conv_day, leads, log=print):
                 for m, f in fields.items():
                     if f is not None:
                         res[f"{s}|{lead}|{m}|{tag}"] = f
-                b = scoring.blend(fields)
+                b = scoring.blend(fields, lead)
                 if b is not None:
                     res[f"{s}|{lead}|blend|{tag}"] = b
             put("day", by_model[s]["day"])

@@ -23,7 +23,7 @@ Final candidates (all uncalibrated; compared against reports):
 """
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -31,7 +31,7 @@ from scipy.ndimage import maximum_filter
 
 import run_case
 import scoring
-from config import CASES_DIR, GRID_LATS, MODELS, case_setup, fh_available
+from config import CAM_MODELS, CASES_DIR, GRID_LATS, MODELS, cam_pools, case_setup, fh_available
 from fetch import cache_path
 
 DY = 0.5 * 111.2e3
@@ -56,14 +56,34 @@ def ramp(x, lo, hi):
     return np.clip((x - lo) / (hi - lo), 0, 1)
 
 
+CAM_DBZ = 40.0  # CAM "storm fired": composite reflectivity >= 40 dBZ anywhere in the cell, any hour
+
+
+def cam_fired(model, init, valid):
+    """Explicit-convection indicator from the hourly 18Z-06Z REFC files (None if too few hours)."""
+    hits, n = None, 0
+    t, end = valid[0], valid[-1]
+    while t <= end:
+        fh = int((t - init).total_seconds() // 3600)
+        r = load(f"{model}_ci", init, fh, "det") if fh_available(model, init, fh) else None
+        if r is not None:
+            f = np.nan_to_num(r["refc"], nan=-99) >= CAM_DBZ
+            hits = f if hits is None else (hits | f)
+            n += 1
+        t += timedelta(hours=1)
+    return hits if n >= 3 else None
+
+
 def member_layers(model, init, mem, valid):
     """P_model indicator, lift and sustain maps for one member of one run (None if incomplete)."""
+    cam = model in CAM_MODELS
     main, extra = {}, {}
     for v in valid:
         fh = int((v - init).total_seconds() // 3600)
         if not fh_available(model, init, fh):
             continue
-        a, b = load(model, init, fh, mem), load(f"{model}_x", init, fh, mem)
+        a = load(model, init, fh, mem)
+        b = a if cam else load(f"{model}_x", init, fh, mem)  # CAM main files carry the extra fields
         if a is not None and b is not None:
             main[v], extra[v] = a, b
     if len(main) < 2:
@@ -73,7 +93,11 @@ def member_layers(model, init, mem, valid):
     first, last = vt[0], vt[-1]
     cape_any = np.max([np.nan_to_num(main[v].get("cape90", main[v].get("cape180", main[v].get("capemu"))))
                        for v in vt], axis=0)
-    if model == "gfs" and "acpcp" in extra[first] and "acpcp" in extra[last]:
+    if cam:
+        fired = cam_fired(model, init, valid)
+        if fired is None:
+            return None
+    elif model == "gfs" and "acpcp" in extra[first] and "acpcp" in extra[last]:
         pr = extra[last]["acpcp"] - extra[first]["acpcp"]
         fired = pr >= 1.0
     elif model == "gefs":
@@ -105,11 +129,13 @@ def member_layers(model, init, mem, valid):
     return p_model, np.max(lift, axis=0), np.max(sus, axis=0)
 
 
-def layers_for_lead(inits, valid):
+def layers_for_lead(inits, valid, lead=None, cams=None):
+    """cams: {model: [inits]} for the CAMs that join this lead (config.cam_pools)."""
+    cams = cams or {}
     out = {}
-    for m in MODELS:
+    for m in MODELS + [c for c in CAM_MODELS if c in cams]:
         acc = [[], [], []]
-        for init in inits:
+        for init in cams.get(m, inits):
             for mem in run_case.members_of(m):
                 r = member_layers(m, init, mem, valid)
                 if r is not None:
@@ -118,7 +144,7 @@ def layers_for_lead(inits, valid):
         out[m] = [np.mean(a, axis=0) if a else None for a in acc]
     blend = []
     for k in range(3):
-        blend.append(scoring.blend({m: out[m][k] for m in MODELS}))
+        blend.append(scoring.blend({m: out[m][k] for m in out}, lead))
     return out, blend
 
 
@@ -155,7 +181,7 @@ def main():
         label = vc.report_mask(rep)
     rows, save = [], {}
     for lead in a.leads:
-        per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid)
+        per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid, lead, cam_pools(conv_day, lead))
         env = res[f"{a.env}|{lead}|blend|day"]
         p_ci, fin = finals(env, pm, pl, s)
         save.update({f"{lead}|p_model": pm, f"{lead}|p_lift": pl, f"{lead}|sustain": s, f"{lead}|p_ci": p_ci})

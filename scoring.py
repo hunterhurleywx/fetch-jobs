@@ -10,7 +10,7 @@ Two schemes are implemented side by side:
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from config import GRID_LATS
+from config import CAM_BLEND, GRID_LATS
 
 _DY_KM = 0.5 * 111.2
 _DX_KM = 0.5 * 111.2 * np.cos(np.deg2rad(37.5))  # grid spacing at mid-domain
@@ -53,7 +53,7 @@ def ingredients(model, f):
         "pwat": f["pwat"],
         "z500": f.get("z500"),
     }
-    if model in ("gfs", "gefs"):
+    if model in ("gfs", "gefs", "hrrr", "nam", "rap"):  # NCEP UPP fields (CAMs carry the same set)
         ing["q2"] = 1000.0 * f["q2"]
         ing["cape_cur"], ing["cin_cur"] = f["cape180"], f["cin180"]
         if "cape90" in f:  # GFS v16+: true 90-hPa mixed layer
@@ -160,12 +160,24 @@ def pool_combine(stack, scheme, deterministic):
 BLEND_WEIGHTS = {"hres": 0.12, "eps": 0.48, "gfs": 0.08, "gefs": 0.32}
 
 
-def blend(fields):
+def weights(lead=None):
+    """Global weights, plus CAM weights at Day 2-1 (globals scaled down; config.CAM_BLEND)."""
+    if lead not in CAM_BLEND:
+        return dict(BLEND_WEIGHTS)
+    g, cam = CAM_BLEND[lead]
+    w = {m: g * v for m, v in BLEND_WEIGHTS.items()}
+    w.update(cam)
+    return w
+
+
+def blend(fields, lead=None):
     """fields: {model: 2-D array or None}. Renormalises over available models."""
-    tot = sum(BLEND_WEIGHTS[m] for m, f in fields.items() if f is not None)
+    w = weights(lead)
+    use = {m: f for m, f in fields.items() if f is not None and m in w}
+    tot = sum(w[m] for m in use)
     if tot == 0:
         return None
-    return sum(BLEND_WEIGHTS[m] * f for m, f in fields.items() if f is not None) / tot
+    return sum(w[m] * f for m, f in use.items()) / tot
 
 
 _ = GRID_LATS  # grid defined in config; imported for clarity of dependency

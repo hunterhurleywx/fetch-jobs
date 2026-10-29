@@ -5,19 +5,26 @@
 import argparse
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from config import CACHE_DIR, MODELS, case_setup, fh_available
+from config import CACHE_DIR, CAM_MODELS, MODELS, cam_pools, case_setup, fh_available
 import fetch
 
 
 def case_tasks(conv_day, leads, models):
     valid, pools = case_setup(conv_day, leads)
     inits = sorted({i for p in pools.values() for i in p})
+    hourly = [valid[0] + timedelta(hours=k) for k in range(int((valid[-1] - valid[0]).total_seconds() // 3600) + 1)]
     tasks = []
     for model in models:
-        for init in inits:
-            for v in valid:
+        base = model.replace("_ci", "")
+        if base in CAM_MODELS:  # CAMs: their own Day 2-1 run pools; storm signal hourly
+            cinits = sorted({i for L in leads for i in cam_pools(conv_day, L).get(base, [])})
+            times = hourly if model.endswith("_ci") else valid
+        else:
+            cinits, times = inits, valid
+        for init in cinits:
+            for v in times:
                 fh = int((v - init).total_seconds() // 3600)
                 if fh_available(model, init, fh):
                     tasks.append((model, init, fh))

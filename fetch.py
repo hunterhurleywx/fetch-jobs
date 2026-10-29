@@ -2,6 +2,7 @@
 import json
 from datetime import datetime
 import os
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,7 +14,7 @@ import requests
 from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMBERS, GEFS_FIELDS_A,
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
-                    OPTIONAL_X)
+                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
 
@@ -268,6 +269,111 @@ def get_ecmwf(init, fh, model, pool):
 
 
 # ---------------------------------------------------------------------------
+# Convection-allowing / rapid-refresh models on Lambert grids (HRRR, NAM 3 km nest, RAP)
+# ---------------------------------------------------------------------------
+CAM_URL = {
+    "hrrr": lambda i, fh: f"https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.{i:%Y%m%d}/conus/hrrr.t{i:%H}z.wrfprsf{fh:02d}.grib2",
+    "nam": lambda i, fh: f"https://noaa-nam-pds.s3.amazonaws.com/nam.{i:%Y%m%d}/nam.t{i:%H}z.conusnest.hiresf{fh:02d}.tm00.grib2",
+    "rap": lambda i, fh: f"https://noaa-rap-pds.s3.amazonaws.com/rap.{i:%Y%m%d}/rap.t{i:%H}z.awp130pgrbf{fh:02d}.grib2",
+}
+_lam_map = {}  # per process: grid key -> flat target-cell index of every source point (-1 = outside)
+
+
+def _cam_handle(buf, sub):
+    """Handle on field `sub` (1-based) of a GRIB message; NAM packs u/v pairs into one message."""
+    if sub == 1:
+        return eccodes.codes_new_from_message(buf)
+    eccodes.codes_grib_multi_support_on()
+    fd, name = tempfile.mkstemp(suffix=".grib2")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(buf)
+        with open(name, "rb") as f:
+            h = None
+            for _ in range(sub):
+                if h is not None:
+                    eccodes.codes_release(h)
+                h = eccodes.codes_grib_new_from_file(f)
+            eccodes.codes_grib_multi_support_reset_file(f)
+        return h
+    finally:
+        try:
+            os.remove(name)
+        except OSError:  # Windows may still hold it; it is in the temp dir
+            pass
+
+
+def _decode_cam(buf, use_max, sub=1):
+    """Lambert field -> 0.5 deg grid: mean of the points in each cell, or max (REFC / UH)."""
+    h = _cam_handle(buf, sub)
+    try:
+        nx, ny = eccodes.codes_get(h, "Nx"), eccodes.codes_get(h, "Ny")
+        key = (nx, ny, eccodes.codes_get(h, "latitudeOfFirstGridPointInDegrees"),
+               eccodes.codes_get(h, "longitudeOfFirstGridPointInDegrees"))
+        vals = eccodes.codes_get_values(h).astype(np.float64)
+        if eccodes.codes_get(h, "bitmapPresent"):
+            vals[vals == eccodes.codes_get(h, "missingValue")] = np.nan
+        if key not in _lam_map:
+            lat = eccodes.codes_get_array(h, "latitudes")
+            lon = eccodes.codes_get_array(h, "longitudes")
+            lon = np.where(lon > 180, lon - 360, lon)
+            ti = np.rint((lat - GRID_LATS[0]) / 0.5).astype(int)
+            tj = np.rint((lon - GRID_LONS[0]) / 0.5).astype(int)
+            ok = (ti >= 0) & (ti < len(GRID_LATS)) & (tj >= 0) & (tj < len(GRID_LONS))
+            _lam_map[key] = np.where(ok, ti * len(GRID_LONS) + tj, -1)
+    finally:
+        eccodes.codes_release(h)
+    t = _lam_map[key]
+    ncell = len(GRID_LATS) * len(GRID_LONS)
+    ok = (t >= 0) & np.isfinite(vals)
+    if use_max:
+        out = np.full(ncell, -np.inf)
+        np.maximum.at(out, t[ok], vals[ok])
+        out[np.isinf(out)] = np.nan
+    else:
+        n = np.bincount(t[ok], minlength=ncell)
+        out = np.bincount(t[ok], vals[ok], minlength=ncell) / np.where(n > 0, n, np.nan)
+    return out.reshape(len(GRID_LATS), len(GRID_LONS)).astype(np.float32)
+
+
+def cam_ranges(idx_text, spec, fh, optional=()):
+    lines = [l.split(":") for l in idx_text.strip().split("\n")]
+    offs = [int(p[1]) for p in lines]
+    want = {"inst": f"{fh} hour fcst", "max": f"{fh - 1}-{fh} hour max fcst"}
+    found = {}
+    for i, p in enumerate(lines):
+        # sub-fields ("303.1", "303.2") share one message: it ends where the next offset differs
+        nxt = next((o for o in offs[i + 1:] if o != offs[i]), None)
+        end = nxt - 1 if nxt is not None else None
+        sub = int(p[0].split(".")[1]) if "." in p[0] else 1
+        for key, (var, lev, kind) in spec.items():
+            if key not in found and p[3] == var and p[4].startswith(lev) and p[5] == want[kind] and end is not None:
+                found[key] = (offs[i], end, (key, sub))
+    missing = [k for k in spec if k not in found and k not in optional]
+    if missing:
+        raise Missing(f"fields {missing} f{fh}")
+    # one request per distinct byte range (u and v of a packed pair share it)
+    return sorted(found.values(), key=lambda r: (r[0], r[2][1]))
+
+
+def get_cam(model, init, fh):
+    """model: hrrr | nam | rap (environment fields) or hrrr_ci | nam_ci | rap_ci (hourly REFC / UH)."""
+    base, ci = model.replace("_ci", ""), model.endswith("_ci")
+    url = CAM_URL[base](init, fh)
+    spec = CAM_CI_FIELDS if ci else CAM_FIELDS
+    wanted = cam_ranges(http_get(url + ".idx").decode(), spec, fh, CAM_OPTIONAL)
+    blobs = {}
+    for start, end in sorted({(s, e) for s, e, _ in wanted}):
+        blobs[(start, end)] = http_get(url, (start, end))
+    fields = {}
+    for s, e, (key, sub) in wanted:
+        b, use_max = blobs[(s, e)], key in CAM_MAX_KEYS
+        fields[key] = (DECODE_POOL.submit(_decode_cam, b, use_max, sub).result() if DECODE_POOL is not None
+                       else _decode_cam(b, use_max, sub))
+    return {"det": fields}
+
+
+# ---------------------------------------------------------------------------
 # Cache layer
 # ---------------------------------------------------------------------------
 def cache_path(model, init, fh, member):
@@ -326,6 +432,8 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):
                     futs[ncep_pool.submit(get_gefs_member, init, fh, m)] = (model, init, fh, m)
+        elif model.replace("_ci", "") in CAM_URL:
+            futs[ncep_pool.submit(get_cam, model, init, fh)] = (model, init, fh, None)
         else:
             futs[ec_pool.submit(get_ecmwf, init, fh, model, ec_member_pool)] = (model, init, fh, None)
     done = 0

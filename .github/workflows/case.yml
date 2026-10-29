@@ -37,10 +37,10 @@ jobs:
       - name: Model downloads (main fields and CI extras in parallel)
         run: |
           mkdir -p "cases/${{ inputs.date }}/logs"
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models gfs gefs hres eps \
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models gfs gefs hres eps hrrr nam rap \
             --ncep-workers 48 --ec-workers 16 --decode-procs 3 > "cases/${{ inputs.date }}/logs/download_main.log" 2>&1 &
           p1=$!
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models gfs_x gefs_x hres_x eps_x \
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci \
             --ncep-workers 32 --ec-workers 12 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_x.log" 2>&1 &
           p2=$!
           wait $p1; s1=$?; wait $p2; s2=$?
