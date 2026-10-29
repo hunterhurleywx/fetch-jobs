@@ -1,9 +1,9 @@
 name: run-case
 run-name: case ${{ inputs.date }} | ${{ inputs.leads }}
-# Whole pipeline for one convective day in the cloud: SPC files, model downloads (main fields and
-# CI extras in parallel), scoring, verification and the CI layer. Only the case folder (SPC files,
-# results.npz, ci_layers.npz, verification, logs; ~50 MB) is uploaded; the raw model cache never
-# leaves the runner. remote_case.py starts runs and downloads the results.
+# Whole pipeline for one convective day in the cloud: SPC files, model fields (decoded-field cache in
+# Cloudflare R2 first, then raw downloads for whatever is missing, main fields and CI extras in
+# parallel), scoring, verification and the CI layer. New decoded fields go back to R2 so reruns skip
+# the download. Only the case folder (~50 MB) is uploaded as the artifact; remote_case.py fetches it.
 on:
   workflow_dispatch:
     inputs:
@@ -21,6 +21,12 @@ jobs:
     env:
       POGS_CACHE: /tmp/pogs_cache
       POGS_CASES: ${{ github.workspace }}/cases
+      MAIN_MODELS: gfs gefs hres eps hrrr nam rap eps_z
+      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: hhwx-model-cache
     defaults:
       run:
         shell: bash  # -eo pipefail, so a failing script fails its step even through `| tee`
@@ -29,23 +35,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt scipy pandas shapely
+      - run: pip install -r requirements.txt scipy pandas shapely boto3
       - name: Runner size
         run: echo "cores=$(nproc)"; free -g; df -h /tmp | tail -1
       - name: SPC outlooks, discussions and reports
         run: python -u fetch_spc.py "${{ inputs.date }}"
-      - name: Model downloads (main fields and CI extras in parallel)
+      - name: Pull decoded fields from R2
+        run: python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS
+      - name: Model downloads for anything not in R2 (main fields and CI extras in parallel)
         run: |
           mkdir -p "cases/${{ inputs.date }}/logs"
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models gfs gefs hres eps hrrr nam rap eps_z \
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS \
             --ncep-workers 48 --ec-workers 16 --decode-procs 3 > "cases/${{ inputs.date }}/logs/download_main.log" 2>&1 &
           p1=$!
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci \
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $X_MODELS \
             --ncep-workers 32 --ec-workers 12 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_x.log" 2>&1 &
           p2=$!
           wait $p1; s1=$?; wait $p2; s2=$?
           tail -n 3 "cases/${{ inputs.date }}/logs/download_main.log" "cases/${{ inputs.date }}/logs/download_x.log"
           exit $(( s1 || s2 ))
+      - name: Push new decoded fields to R2
+        run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS
       - name: Score
         run: python -u run_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --no-plots 2>&1 | tee "cases/${{ inputs.date }}/logs/run_case.log"
       - name: Verify (skipped for real-time cases without reports)

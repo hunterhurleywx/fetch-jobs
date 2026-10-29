@@ -8,6 +8,7 @@
 !/download_case.py
 !/remote_fetch.py
 !/remote_case.py
+!/r2_cache.py
 !/fetch_spc.py
 !/run_case.py
 !/scoring.py
