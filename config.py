@@ -59,9 +59,9 @@ EC_FIELDS = {
 MODELS = ["gfs", "gefs", "hres", "eps"]
 MODEL_LABELS = {"gfs": "GFS", "gefs": "GEFS", "hres": "ECMWF HRES", "eps": "ECMWF EPS", "blend": "Blend"}
 GEFS_MEMBERS = ["c00"] + [f"p{i:02d}" for i in range(1, 31)]
-# Perturbed members only (the control is the HRES configuration). 25 of 50 halves the
-# dominant download cost on the home connection; set POGS_EPS_N=50 for the full ensemble.
-EPS_MEMBERS = [str(i) for i in range(1, int(os.environ.get("POGS_EPS_N", 25)) + 1)]
+# Perturbed members only (the control is the HRES configuration). Full 50 by default now
+# that downloads run in the cloud (remote_fetch.py); POGS_EPS_N=25 halves a home download.
+EPS_MEMBERS = [str(i) for i in range(1, int(os.environ.get("POGS_EPS_N", 50)) + 1)]
 # EPS members skip geopotential: the 700-500 hPa thickness is computed hypsometrically
 EC_FIELDS_EPS = {k: v for k, v in EC_FIELDS.items() if k not in ("z500", "z700")}
 
