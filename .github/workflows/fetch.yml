@@ -1,0 +1,45 @@
+name: fetch-case
+# Downloads and crops model fields for one case in the cloud (fast network next to
+# the NOAA/ECMWF buckets), then publishes only the small CONUS npz files as assets of a
+# temporary release (release assets don't count against the 500 MB Actions storage).
+# remote_fetch.py downloads the assets and deletes the release.
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Convective day (YYYY-MM-DD)"
+        required: true
+      leads:
+        description: "SPC lead days, space separated"
+        default: "7 6 5"
+      models:
+        description: "Models, space separated"
+        default: "gfs gefs hres eps"
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      POGS_CACHE: ${{ github.workspace }}/cache
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Download and crop
+        run: |
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} \
+            --models ${{ inputs.models }} --ncep-workers 48 --ec-workers 16 --decode-procs 4
+      - name: Pack and publish
+        run: |
+          tar -C "$POGS_CACHE" -cf cache.tar .
+          split -b 1900m -d cache.tar cache.tar.part
+          ls -l cache.tar.part*
+          tag="cache-${{ inputs.date }}-${{ github.run_id }}"
+          gh release create "$tag" cache.tar.part* --title "$tag" --notes "temporary cache" --prerelease
