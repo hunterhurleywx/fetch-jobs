@@ -164,6 +164,7 @@ def main():
     ap.add_argument("date")
     ap.add_argument("--leads", type=int, nargs="+", default=[8, 7, 6, 5, 4, 3, 2, 1])
     ap.add_argument("--env", default="v2", help="environment scheme key in results.npz")
+    ap.add_argument("--out", default="ci_layers.npz", help="output file name (e.g. ci_layers_v3.npz)")
     a = ap.parse_args()
     import verify_case as vc
     case, conv_day = a.date, datetime.strptime(a.date, "%Y-%m-%d")
@@ -200,12 +201,12 @@ def main():
                              top5_tor=t5[tor].mean() if tor.any() else np.nan,
                              top5_wind=t5[wind].mean() if wind.any() else np.nan, top5_all=t5.mean()))
         print(f"D{lead} done", flush=True)
-    np.savez_compressed(os.path.join(outdir, "ci_layers.npz"), **{k.replace("|", "__"): v for k, v in save.items()})
+    np.savez_compressed(os.path.join(outdir, a.out), **{k.replace("|", "__"): v for k, v in save.items()})
     if not have_reports:
         print("no reports yet: layers saved, verification skipped")
         return
     df = pd.DataFrame(rows)
-    df.to_csv(os.path.join(outdir, "ci_experiment.csv"), index=False)
+    df.to_csv(os.path.join(outdir, a.out.replace("ci_layers", "ci_experiment").replace(".npz", ".csv")), index=False)
     pd.set_option("display.width", 200)
     print(df.groupby("method")[["auc", "top5_tor", "top5_wind", "top5_all"]].mean().round(3).to_string())
     print(df.pivot_table(index="lead", columns="method", values="auc").round(3).to_string())

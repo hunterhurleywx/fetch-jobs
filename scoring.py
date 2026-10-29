@@ -53,6 +53,9 @@ def ingredients(model, f):
         "pwat": f["pwat"],
         "z500": f.get("z500"),
     }
+    if "u850" in f:  # low-level shear / LLJ (CAM main files; merged from *_x for global models)
+        ing["llshear"] = np.hypot(f["u850"] - f["u10"], f["v850"] - f["v10"])
+        ing["v850"] = np.hypot(f["u850"], f["v850"])
     if model in ("gfs", "gefs", "hrrr", "nam", "rap"):  # NCEP UPP fields (CAMs carry the same set)
         ing["q2"] = 1000.0 * f["q2"]
         ing["cape_cur"], ing["cin_cur"] = f["cape180"], f["cin180"]
@@ -134,6 +137,34 @@ def score_v2(ing, fh, parts=False):
     if parts:
         return score, {"inst": inst, "shear": shear, "lift": lift, "cin": cin, "moist": moist}
     return score
+
+
+def score_v3(ing, fh, dz12=None):
+    """EXPERIMENTAL (29 Oct 2026, from SPC's 14-15 Mar 2025 Day 1 reasoning; not the product).
+
+    v2 with three changes:
+      inst   CAPE credit saturates at ~1000 J/kg ("SBCAPE should exceed 1000 J/kg" is enough with
+             strong forcing/shear), so extra Gulf CAPE stops dominating;
+      ll     low-level shear / LLJ: max(ramp(|V850-V10|, 8, 18 m/s), ramp(|V850|, 15, 28 m/s)),
+             factor 0.6 (none) .. 1.0;
+      force  12-h 500 hPa height fall (18Z->06Z) scales lift: 0.75 at < 30 m .. 1.25 at > 150 m falls
+             (non-saturating forcing; 1.0 when heights are unavailable).
+    """
+    p = PROFILES["v2"]
+    cape = np.clip(np.nan_to_num(ing["cape_v2"], nan=0.0), 0, None)
+    inst = np.clip(ramp(cape, 0, 1000.0) ** 0.5 * (1.0 + 0.5 * ramp(ing["lr75"], 6.0, 7.5)), 0, 1)
+    shear = ramp(ing["shear"], 10.0, p["shear_hi"])
+    omega = np.clip(gauss(ing["omega"], 150), -0.3, 0.3)
+    ln = p["lift_neutral"]
+    lift = np.interp(omega, _LIFT_X, [1.10, 1.00, 0.80, ln, ln * 0.75, 0.20])
+    if dz12 is not None:
+        lift = lift * (0.75 + 0.5 * ramp(-gauss(dz12, 150), 30.0, 150.0))
+    cin = 1.0 if ing["cin_v2"] is None else ramp(200.0 + np.nan_to_num(ing["cin_v2"], nan=0.0), 0, 150)
+    moist = 0.5 + 0.5 * ramp(ing["q2"], *p["moist"])
+    ll = 1.0
+    if "llshear" in ing:
+        ll = 0.6 + 0.4 * np.maximum(ramp(ing["llshear"], 8.0, 18.0), ramp(ing["v850"], 15.0, 28.0))
+    return gauss(np.clip(inst * shear * lift * cin * moist * ll, 0, 1), 100)
 
 
 def trimmed_mean(stack, frac=0.1):

@@ -15,7 +15,7 @@ from config import CAM_MODELS, CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam
 from fetch import cache_path
 import scoring
 
-SCHEMES = ("current", "v2")
+SCHEMES = ("current", "v2", "v3")  # v3 = experimental (scoring.score_v3)
 DIAG_KEYS = ("cape_v2", "shear", "omega", "lr75", "q2", "pwat", "z500")
 
 
@@ -31,6 +31,19 @@ def load(model, init, fh, member):
         return {k: z[k] for k in z.files}
 
 
+def height_fall(model, init, mem, t0, t1):
+    """12-h 500 hPa height change t0 -> t1 (m; negative = falls) for one member, or None."""
+    src = "eps_z" if model == "eps" else model  # EPS geopotential is fetched separately
+    z = []
+    for t in (t0, t1):
+        fh = int((t - init).total_seconds() // 3600)
+        f = load(src, init, fh, mem) if fh_available(model, init, fh) else None
+        if f is None or "z500" not in f:
+            return None
+        z.append(f["z500"])
+    return z[1] - z[0]
+
+
 def score_pool(model, inits, valid):
     """Score every member of every run in a pool.
 
@@ -40,18 +53,25 @@ def score_pool(model, inits, valid):
     out = {s: {"vt": {v: [] for v in valid}, "day": [], "cyc": {}} for s in SCHEMES}
     diag_sum, diag_n = {}, {}
     v00 = valid[2]
+    fhof = lambda init, v: int((v - init).total_seconds() // 3600)
     for init in inits:
         for mem in members_of(model):
+            dz12 = height_fall(model, init, mem, valid[0], valid[-1])
             per_vt = {s: [] for s in SCHEMES}
             for v in valid:
-                fh = int((v - init).total_seconds() // 3600)
+                fh = fhof(init, v)
                 if not fh_available(model, init, fh):
                     continue
                 f = load(model, init, fh, mem)
                 if f is None:
                     continue
+                if model in MODELS:  # 850 hPa wind for v3's low-level term (v2 does not use it)
+                    x = load(f"{model}_x", init, fh, mem)
+                    if x is not None:
+                        f.update({k: x[k] for k in ("u850", "v850") if k in x})
                 ing = scoring.ingredients(model, f)
-                sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh)}
+                sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh),
+                      "v3": scoring.score_v3(ing, fh, dz12)}
                 for s in SCHEMES:
                     out[s]["vt"][v].append(sc[s])
                     per_vt[s].append(sc[s])
