@@ -362,9 +362,9 @@ def get_cam(model, init, fh):
     url = CAM_URL[base](init, fh)
     spec = CAM_CI_FIELDS if ci else CAM_FIELDS
     wanted = cam_ranges(http_get(url + ".idx").decode(), spec, fh, CAM_OPTIONAL)
-    blobs = {}
-    for start, end in sorted({(s, e) for s, e, _ in wanted}):
-        blobs[(start, end)] = http_get(url, (start, end))
+    rngs = sorted({(s, e) for s, e, _ in wanted})
+    with ThreadPoolExecutor(8) as ex:  # the ranges are independent; fetch them concurrently
+        blobs = dict(zip(rngs, ex.map(lambda r: http_get(url, r), rngs)))
     fields = {}
     for s, e, (key, sub) in wanted:
         b, use_max = blobs[(s, e)], key in CAM_MAX_KEYS
