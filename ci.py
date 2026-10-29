@@ -144,12 +144,15 @@ def main():
     outdir = os.path.join(CASES_DIR, case, "output")
     res = dict(np.load(os.path.join(outdir, "results.npz")))
     valid, pools = case_setup(conv_day, a.leads)
-    rep = pd.read_csv(os.path.join(CASES_DIR, case, "spc", f"reports_{conv_day:%Y%m%d}.csv"))
-    rep = rep[(rep.lat > 24) & (rep.lat < 50) & (rep.lon > -126) & (rep.lon < -66)]
-    tor, wind = rep.type.str.startswith("torn").values, rep.type.str.startswith("wind").values
-    ri = np.rint((rep.lat.values - 20) / 0.5).astype(int)
-    rj = np.rint((rep.lon.values + 130) / 0.5).astype(int)
-    label = vc.report_mask(rep)
+    rpath = os.path.join(CASES_DIR, case, "spc", f"reports_{conv_day:%Y%m%d}.csv")
+    have_reports = os.path.exists(rpath)  # real-time cases: no reports yet
+    if have_reports:
+        rep = pd.read_csv(rpath)
+        rep = rep[(rep.lat > 24) & (rep.lat < 50) & (rep.lon > -126) & (rep.lon < -66)]
+        tor, wind = rep.type.str.startswith("torn").values, rep.type.str.startswith("wind").values
+        ri = np.rint((rep.lat.values - 20) / 0.5).astype(int)
+        rj = np.rint((rep.lon.values + 130) / 0.5).astype(int)
+        label = vc.report_mask(rep)
     rows, save = [], {}
     for lead in a.leads:
         per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid)
@@ -158,14 +161,19 @@ def main():
         save.update({f"{lead}|p_model": pm, f"{lead}|p_lift": pl, f"{lead}|sustain": s, f"{lead}|p_ci": p_ci})
         for name, f in fin.items():
             save[f"{lead}|{name}"] = f
+            if not have_reports:
+                continue
             t5 = vc.top_area_mask(f, 0.05)[ri, rj]
             rows.append(dict(lead=lead, method=name, auc=vc.auc(f, label, vc.W),
                              top5_tor=t5[tor].mean() if tor.any() else np.nan,
                              top5_wind=t5[wind].mean() if wind.any() else np.nan, top5_all=t5.mean()))
         print(f"D{lead} done", flush=True)
+    np.savez_compressed(os.path.join(outdir, "ci_layers.npz"), **{k.replace("|", "__"): v for k, v in save.items()})
+    if not have_reports:
+        print("no reports yet: layers saved, verification skipped")
+        return
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(outdir, "ci_experiment.csv"), index=False)
-    np.savez_compressed(os.path.join(outdir, "ci_layers.npz"), **{k.replace("|", "__"): v for k, v in save.items()})
     pd.set_option("display.width", 200)
     print(df.groupby("method")[["auc", "top5_tor", "top5_wind", "top5_all"]].mean().round(3).to_string())
     print(df.pivot_table(index="lead", columns="method", values="auc").round(3).to_string())
