@@ -26,14 +26,17 @@ def gh(*args, capture=True):
 
 
 def trigger(date, leads, models):
+    """Dispatch a run and return its id, matched by run-name (safe with parallel dispatches)."""
+    title = f"fetch {date} | {' '.join(models)} | {' '.join(leads)}"
     before = {r["databaseId"] for r in json.loads(gh("run", "list", "-R", REPO, "-w", "fetch.yml",
-                                                       "--json", "databaseId", "-L", "50"))}
+                                                       "--json", "databaseId", "-L", "100"))}
     gh("workflow", "run", "fetch.yml", "-R", REPO, "-f", f"date={date}",
        "-f", f"leads={' '.join(leads)}", "-f", f"models={' '.join(models)}")
-    while True:  # the new run takes a few seconds to appear
+    while True:
         time.sleep(3)
-        runs = json.loads(gh("run", "list", "-R", REPO, "-w", "fetch.yml", "--json", "databaseId", "-L", "10"))
-        new = [r["databaseId"] for r in runs if r["databaseId"] not in before]
+        runs = json.loads(gh("run", "list", "-R", REPO, "-w", "fetch.yml",
+                             "--json", "databaseId,displayTitle", "-L", "30"))
+        new = [r["databaseId"] for r in runs if r["databaseId"] not in before and r["displayTitle"] == title]
         if new:
             return new[0]
 
@@ -66,13 +69,27 @@ def collect(date, run_id, log=print):
     gh("release", "delete", tag, "-R", REPO, "--yes", "--cleanup-tag")
 
 
+def collect_pending(log=print):
+    """Download and unpack every finished cache-* release (recovers interrupted collections)."""
+    rels = json.loads(gh("release", "list", "-R", REPO, "--json", "tagName", "-L", "100"))
+    for r in rels:
+        tag = r["tagName"]
+        if tag.startswith("cache-"):
+            date, run_id = tag[6:16], tag.rsplit("-", 1)[1]
+            collect(date, run_id, log=log)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dates", nargs="+")
+    ap.add_argument("dates", nargs="*")
+    ap.add_argument("--collect-pending", action="store_true")
     ap.add_argument("--leads", nargs="+", default=["7", "6", "5"])
     ap.add_argument("--models", nargs="+", default=["gfs", "gefs", "hres", "eps"])
     a = ap.parse_args()
     t0 = time.time()
+    if a.collect_pending:
+        collect_pending(log=lambda s: print(s, flush=True))
+        return
     runs = [(d, trigger(d, a.leads, a.models)) for d in a.dates]  # cloud runs go in parallel
     for d, rid in runs:
         print(f"[{d}] run {rid} started", flush=True)

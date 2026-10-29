@@ -1,4 +1,5 @@
 name: fetch-case
+run-name: fetch ${{ inputs.date }} | ${{ inputs.models }} | ${{ inputs.leads }}
 # Downloads and crops model fields for one case in the cloud (fast network next to
 # the NOAA/ECMWF buckets), then publishes only the small CONUS npz files as assets of a
 # temporary release (release assets don't count against the 500 MB Actions storage).
