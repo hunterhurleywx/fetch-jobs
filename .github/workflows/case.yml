@@ -44,7 +44,7 @@ jobs:
             --ncep-workers 32 --ec-workers 12 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_x.log" 2>&1 &
           p2=$!
           wait $p1; s1=$?; wait $p2; s2=$?
-          tail -3 "cases/${{ inputs.date }}/logs/download_main.log" "cases/${{ inputs.date }}/logs/download_x.log"
+          tail -n 3 "cases/${{ inputs.date }}/logs/download_main.log" "cases/${{ inputs.date }}/logs/download_x.log"
           exit $(( s1 || s2 ))
       - name: Score
         run: python -u run_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --no-plots 2>&1 | tee "cases/${{ inputs.date }}/logs/run_case.log"
