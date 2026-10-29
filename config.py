@@ -8,7 +8,7 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Field cache lives on D: (outside OneDrive, 240 GB free). Raw GRIB is never kept:
 # each message is decoded, mapped to the 0.5 deg grid and saved as compressed npz.
 CACHE_DIR = os.environ.get("POGS_CACHE", r"D:\pogs_cache")
-CASES_DIR = os.path.join(PROJECT_DIR, "cases")
+CASES_DIR = os.environ.get("POGS_CASES", os.path.join(PROJECT_DIR, "cases"))
 
 # Common analysis grid (0.5 deg) that every model is mapped onto
 GRID_LATS = np.arange(20.0, 55.0 + 0.01, 0.5)

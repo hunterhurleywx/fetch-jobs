@@ -145,7 +145,7 @@ def main():
     res = dict(np.load(os.path.join(outdir, "results.npz")))
     valid, pools = case_setup(conv_day, a.leads)
     rpath = os.path.join(CASES_DIR, case, "spc", f"reports_{conv_day:%Y%m%d}.csv")
-    have_reports = os.path.exists(rpath)  # real-time cases: no reports yet
+    have_reports = os.path.exists(rpath) and len(pd.read_csv(rpath)) > 0  # real-time cases: none yet
     if have_reports:
         rep = pd.read_csv(rpath)
         rep = rep[(rep.lat > 24) & (rep.lat < 50) & (rep.lon > -126) & (rep.lon < -66)]
@@ -159,6 +159,12 @@ def main():
         env = res[f"{a.env}|{lead}|blend|day"]
         p_ci, fin = finals(env, pm, pl, s)
         save.update({f"{lead}|p_model": pm, f"{lead}|p_lift": pl, f"{lead}|sustain": s, f"{lead}|p_ci": p_ci})
+        for m, lay in per_model.items():  # each model's own layers and env x CI, for per-model maps
+            env_m = res.get(f"{a.env}|{lead}|{m}|day")
+            if env_m is None or any(x is None for x in lay):
+                continue
+            save.update({f"{lead}|{m}|p_model": lay[0], f"{lead}|{m}|p_lift": lay[1], f"{lead}|{m}|sustain": lay[2],
+                         f"{lead}|{m}|env*ci": finals(env_m, *lay)[1]["env*ci"]})
         for name, f in fin.items():
             save[f"{lead}|{name}"] = f
             if not have_reports:
