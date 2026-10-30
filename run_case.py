@@ -12,6 +12,7 @@ from datetime import datetime
 import numpy as np
 
 from config import CAM_MODELS, CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam_pools, case_setup, fh_available
+import fetch
 from fetch import cache_path
 import scoring
 
@@ -24,11 +25,7 @@ def members_of(model):
 
 
 def load(model, init, fh, member):
-    p = cache_path(model, init, fh, member)
-    if not os.path.exists(p):
-        return None
-    with np.load(p) as z:
-        return {k: z[k] for k in z.files}
+    return fetch.read_cached(model, init, fh, member)  # CAM winds rotated to earth-relative
 
 
 def height_fall(model, init, mem, t0, t1):

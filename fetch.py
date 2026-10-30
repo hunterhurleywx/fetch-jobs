@@ -389,6 +389,38 @@ def cache_path(model, init, fh, member):
     return os.path.join(CACHE_DIR, model, f"{init:%Y%m%d%H}", f"f{fh:03d}", f"{member}.npz")
 
 
+# CAM winds are grid-relative on their Lambert grids (GRIB uvRelativeToGrid = 1, checked 30 Oct 2026).
+# The cache keeps them as decoded; read_cached() rotates u/v pairs to earth-relative on the way out.
+# model: (Latin1 = Latin2 [deg], LoV [deg E]) from the GRIB headers.
+CAM_LAMBERT = {"hrrr": (38.5, 262.5), "nam": (38.5, 262.5), "rap": (25.0, 265.0), "nam12": (25.0, 265.0)}
+
+
+def earth_relative(model, f):
+    """Rotate grid-relative u*/v* pairs of a CAM field dict to earth-relative (in place; returns f)."""
+    if model not in CAM_LAMBERT:
+        return f
+    lat1, lov = CAM_LAMBERT[model]
+    lon = np.broadcast_to(GRID_LONS[None, :], (len(GRID_LATS), len(GRID_LONS)))
+    a = np.sin(np.deg2rad(lat1)) * np.deg2rad(lon - (lov - 360.0))  # Lambert cone factor x (lon - LoV)
+    ca, sa = np.cos(a), np.sin(a)
+    for ku in [k for k in f if k.startswith("u") and "v" + k[1:] in f]:
+        kv = "v" + ku[1:]
+        u, v = f[ku], f[kv]
+        if np.shape(u) != ca.shape:
+            continue
+        f[ku], f[kv] = ca * u + sa * v, -sa * u + ca * v
+    return f
+
+
+def read_cached(model, init, fh, member):
+    """Cached field dict (earth-relative winds for CAMs), or None."""
+    p = cache_path(model, init, fh, member)
+    if not os.path.exists(p):
+        return None
+    with np.load(p) as z:
+        return earth_relative(model, {k: z[k] for k in z.files})
+
+
 def missing_marker(model, init, fh):
     return os.path.join(CACHE_DIR, model, f"{init:%Y%m%d%H}", f"f{fh:03d}", "_MISSING")
 

@@ -32,6 +32,7 @@ from scipy.ndimage import maximum_filter
 import run_case
 import scoring
 from config import CAM_MODELS, CASES_DIR, GRID_LATS, MODELS, cam_pools, case_setup, fh_available
+import fetch
 from fetch import cache_path
 
 DY = 0.5 * 111.2e3
@@ -39,11 +40,7 @@ DX = DY * np.cos(np.deg2rad(GRID_LATS))[:, None]
 
 
 def load(model, init, fh, mem):
-    p = cache_path(model, init, fh, mem)
-    if not os.path.exists(p):
-        return None
-    with np.load(p) as z:
-        return {k: z[k] for k in z.files}
+    return fetch.read_cached(model, init, fh, mem)  # CAM winds rotated to earth-relative
 
 
 def convergence(u, v):
