@@ -282,6 +282,7 @@ CAM_URL = {
     "hrrr": lambda i, fh: f"https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.{i:%Y%m%d}/conus/hrrr.t{i:%H}z.wrfprsf{fh:02d}.grib2",
     "nam": lambda i, fh: f"https://noaa-nam-pds.s3.amazonaws.com/nam.{i:%Y%m%d}/nam.t{i:%H}z.conusnest.hiresf{fh:02d}.tm00.grib2",
     "rap": lambda i, fh: f"https://noaa-rap-pds.s3.amazonaws.com/rap.{i:%Y%m%d}/rap.t{i:%H}z.awp130pgrbf{fh:02d}.grib2",
+    "nam12": lambda i, fh: f"https://noaa-nam-pds.s3.amazonaws.com/nam.{i:%Y%m%d}/nam.t{i:%H}z.awphys{fh:02d}.tm00.grib2",
 }
 _lam_map = {}  # per process: grid key -> flat target-cell index of every source point (-1 = outside)
 
@@ -368,7 +369,8 @@ def get_cam(model, init, fh):
     base, ci = model.replace("_ci", ""), model.endswith("_ci")
     url = CAM_URL[base](init, fh)
     spec = CAM_CI_FIELDS if ci else CAM_FIELDS
-    wanted = cam_ranges(http_get(url + ".idx").decode(), spec, fh, CAM_OPTIONAL)
+    optional = CAM_OPTIONAL | ({"cape90", "cin90"} if base == "nam12" else set())  # NAM 12 km: 180-0 mb CAPE/CIN only
+    wanted = cam_ranges(http_get(url + ".idx").decode(), spec, fh, optional)
     rngs = sorted({(s, e) for s, e, _ in wanted})
     with ThreadPoolExecutor(8) as ex:  # the ranges are independent; fetch them concurrently
         blobs = dict(zip(rngs, ex.map(lambda r: http_get(url, r), rngs)))

@@ -123,7 +123,7 @@ EC_FIELDS_EPS = {k: v for k, v in EC_FIELDS.items() if k not in ("z500", "z700")
 # the 0.5 deg grid: mean for environment fields, max for REFC / UH (a storm anywhere in the cell).
 # key -> (VAR, level prefix, kind); kind "inst" = "<fh> hour fcst", "max" = "<fh-1>-<fh> hour max fcst"
 # ---------------------------------------------------------------------------
-CAM_MODELS = ["hrrr", "nam", "rap"]
+CAM_MODELS = ["hrrr", "nam", "rap", "nam12"]  # nam = NAM 3 km nest; nam12 = NAM 12 km (awphys, to 84 h)
 CAM_FIELDS = {
     "cape90": ("CAPE", "90-0 mb above ground", "inst"), "cin90": ("CIN", "90-0 mb above ground", "inst"),
     "cape180": ("CAPE", "180-0 mb above ground", "inst"), "cin180": ("CIN", "180-0 mb above ground", "inst"),
@@ -141,8 +141,9 @@ CAM_CI_FIELDS = {"refc": ("REFC", "entire atmosphere", "inst"), "uh25": ("MXUPHL
 CAM_OPTIONAL = {"uh25"}  # RAP has no UH
 CAM_MAX_KEYS = {"refc", "uh25"}
 # Day 2-1 blend: globals keep their relative weights, scaled down; CAM weights added.
-CAM_BLEND = {2: (0.75, {"nam": 0.15, "hrrr": 0.10}),
-             1: (0.40, {"hrrr": 0.30, "nam": 0.15, "rap": 0.15})}
+# Hunter, 30 Oct 2026: Days 2 and 1 drop the global models; only the CAMs and the NAM 12 km.
+CAM_BLEND = {2: (0.0, {"nam": 0.35, "hrrr": 0.25, "nam12": 0.25, "rap": 0.15}),
+             1: (0.0, {"hrrr": 0.40, "nam": 0.25, "rap": 0.20, "nam12": 0.15})}
 
 
 def cam_pools(conv_day, lead):
@@ -151,7 +152,7 @@ def cam_pools(conv_day, lead):
     h = lambda k: cut - timedelta(hours=k)
     if lead == 1:
         pools = {"hrrr": [h(18), h(12), h(6), h(0)], "nam": [h(18), h(12), h(6), h(0)],
-                 "rap": [h(21), h(15), h(9), h(3)]}
+                 "rap": [h(21), h(15), h(9), h(3)], "nam12": [h(18), h(12), h(6), h(0)]}
         # Real-time override, e.g. POGS_CAM_RUNS="hrrr:2026102919,2026102920;rap:2026102923"
         # replaces those models' Day 1 runs with the newest ones (nowcast-style)
         for part in filter(None, os.environ.get("POGS_CAM_RUNS", "").split(";")):
@@ -159,7 +160,7 @@ def cam_pools(conv_day, lead):
             pools[m.strip()] = [datetime.strptime(r.strip(), "%Y%m%d%H") for r in runs.split(",")]
         return pools
     if lead == 2:
-        return {"hrrr": [h(6), h(0)], "nam": [h(12), h(6), h(0)]}
+        return {"hrrr": [h(6), h(0)], "nam": [h(12), h(6), h(0)], "rap": [h(9), h(3)], "nam12": [h(12), h(6), h(0)]}
     return {}
 
 
@@ -172,6 +173,8 @@ def fh_available(model, init, fh):
         return fh <= 18 or (init.hour % 6 == 0 and fh <= 48)
     if model == "nam":
         return fh <= 60
+    if model == "nam12":  # awphys: hourly to 36 h, then 3-hourly to 84 h
+        return fh <= 84 and (fh <= 36 or fh % 3 == 0)
     if model == "rap":
         return fh <= 21 or (init.hour % 6 == 3 and fh <= 51)
     if model == "gfs":
