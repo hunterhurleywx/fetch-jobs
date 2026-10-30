@@ -15,7 +15,8 @@ from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMB
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
                     NCEP_UA_FIELDS, EC_UA_FIELDS, NAM12_X_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
-                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS)
+                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS,
+                    ADD_FIELDS, ADD_MAX_VARS, add_key)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
 
@@ -249,7 +250,9 @@ def get_ecmwf(init, fh, model, pool):
     base = ec_base(init, fh, model)
     rows = [json.loads(l) for l in http_get(base + ".index").decode().splitlines() if l.strip()]
     spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS, "hres_x": EC_X_FIELDS,
-            "eps_x": EC_X_FIELDS, "eps_z": EC_Z_FIELDS, "hres_ua": EC_UA_FIELDS, "eps_ua": EC_UA_FIELDS, "eps_pl": EC_PL_FIELDS}.get(model, EC_FIELDS)
+            "eps_x": EC_X_FIELDS, "eps_z": EC_Z_FIELDS, "hres_ua": EC_UA_FIELDS, "eps_ua": EC_UA_FIELDS, "eps_pl": EC_PL_FIELDS,
+            "hres_add": {f"{p}{lv or ''}": (p, lt, lv) for p, lt, lv in ADD_FIELDS["hres_add"]},
+            "eps_add": {f"{p}{lv or ''}": (p, lt, lv) for p, lt, lv in ADD_FIELDS["eps_add"]}}.get(model, EC_FIELDS)
     have = {r["param"] for r in rows}
     spec = {k: ((EC_ALIASES[p] if p not in have and p in EC_ALIASES else p), lt, lv)
             for k, (p, lt, lv) in spec.items()}
@@ -267,7 +270,7 @@ def get_ecmwf(init, fh, model, pool):
             if r["param"] == param and r["levtype"] == levtype and r.get("levelist") == lev:
                 o = r["_offset"]
                 want.setdefault(mem, []).append((o, o + r["_length"] - 1, key))
-    need = len([k for k in spec if k not in OPTIONAL_X])
+    need = 1 if model.endswith("_add") else len([k for k in spec if k not in OPTIONAL_X])
     for m in members:
         if len(want.get(m, [])) < need:
             raise Missing(f"{model} {init} f{fh} member {m} incomplete")
@@ -383,6 +386,65 @@ def get_cam(model, init, fh):
 
 
 # ---------------------------------------------------------------------------
+# Add-on sets (config.ADD_FIELDS): flexible label matching, every field optional
+# ---------------------------------------------------------------------------
+_ADD_MISSING_LOGGED = set()
+
+
+def _add_ranges(idx_text, spec, fh):
+    """[(start, end, key, sub)] for each (var, level) in spec: instant > 1-h max/min > accumulation > average."""
+    lines = [l.split(":") for l in idx_text.strip().split(chr(10))]
+    offs = [int(p[1]) for p in lines]
+    pref = [f"{fh} hour fcst", f"{fh - 1}-{fh} hour max fcst", f"{fh - 1}-{fh} hour min fcst", f"0-{fh} hour acc fcst",
+            f"{fh - 1}-{fh} hour acc fcst", f"{fh - 3}-{fh} hour acc fcst", f"{fh - 6}-{fh} hour ave fcst",
+            f"{fh - 3}-{fh} hour ave fcst", f"{fh - 1}-{fh} hour ave fcst", f"0-{fh} hour ave fcst"]
+    best = {}
+    for i, p in enumerate(lines):
+        if len(p) < 6 or p[5] not in pref:
+            continue
+        for var, lev in spec:
+            if p[3] == var and (p[4] == lev or p[4].startswith(lev + " (") or p[4].startswith(lev + " level")):
+                rank = pref.index(p[5])
+                if (var, lev) not in best or rank < best[(var, lev)][0]:
+                    nxt = next((o for o in offs[i + 1:] if o != offs[i]), None)
+                    sub = int(p[0].split(".")[1]) if "." in p[0] else 1
+                    best[(var, lev)] = (rank, offs[i], nxt - 1 if nxt else offs[i] + 20_000_000, sub)
+    return [(s, e, (add_key(v, l), sub, v)) for (v, l), (_, s, e, sub) in best.items()], [x for x in spec if x not in best]
+
+
+def get_add(model, init, fh, mem=None):
+    """One add-on set step (NCEP global or CAM) -> fields dict on the 0.5 deg grid; missing fields are skipped."""
+    if model == "gfs_add":
+        jobs = [(gfs_url(init, fh), ADD_FIELDS[model])]
+    elif model == "gefs_add":
+        jobs = [(gefs_url(init, fh, mem, ab), ADD_FIELDS[model][ab]) for ab in ("a", "b")]
+    elif model == "hrrr_sfc":
+        jobs = [(f"https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.{init:%Y%m%d}/conus/hrrr.t{init:%H}z.wrfsfcf{fh:02d}.grib2", ADD_FIELDS[model])]
+    else:
+        jobs = [(CAM_URL[model.replace("_add", "")](init, fh), ADD_FIELDS[model])]
+    cam = model not in ("gfs_add", "gefs_add")
+    fields = {}
+    for url, spec in jobs:
+        wanted, miss = _add_ranges(http_get(url + ".idx").decode(), spec, fh)
+        if miss and (model, len(miss)) not in _ADD_MISSING_LOGGED:
+            _ADD_MISSING_LOGGED.add((model, len(miss)))
+            print(f"  note: {model} has no {', '.join(f'{v}:{l}' for v, l in miss[:12])}{' ...' if len(miss) > 12 else ''}", flush=True)
+        if not wanted:
+            continue
+        if cam:
+            rngs = sorted({(s, e) for s, e, _ in wanted})
+            with ThreadPoolExecutor(8) as ex:
+                blobs = dict(zip(rngs, ex.map(lambda r: http_get(url, r), rngs)))
+            for s, e, (key, sub, var) in wanted:
+                fields[key] = _decode_cam(blobs[(s, e)], var in ADD_MAX_VARS, sub)
+        else:
+            fields.update(fetch_ranges(url, [(s, e, key) for s, e, (key, _, _) in wanted]))
+    if not fields:
+        raise Missing(f"{model} f{fh}: no add-on fields")
+    return fields
+
+
+# ---------------------------------------------------------------------------
 # Cache layer
 # ---------------------------------------------------------------------------
 def cache_path(model, init, fh, member):
@@ -427,7 +489,8 @@ def missing_marker(model, init, fh):
 
 def is_cached(model, init, fh):
     members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
-               "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS}.get(model, ["det"])
+               "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS,
+               "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)
@@ -484,17 +547,24 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):
                     futs[ncep_pool.submit(get_gefs_member, init, fh, m)] = (model, init, fh, m)
+        elif model == "gefs_add":
+            for m in GEFS_MEMBERS:
+                if not os.path.exists(cache_path(model, init, fh, m)):
+                    futs[ncep_pool.submit(get_add, model, init, fh, m)] = (model, init, fh, m)
+        elif model in ("gfs_add", "hrrr_add", "nam_add", "rap_add", "nam12_add", "hrrr_sfc"):
+            futs[ncep_pool.submit(get_add, model, init, fh)] = (model, init, fh, None)
         elif model.replace("_ci", "") in CAM_URL or model == "nam12_x":
             futs[ncep_pool.submit(get_cam, model, init, fh)] = (model, init, fh, None)
         else:
             futs[ec_pool.submit(get_ecmwf, init, fh, model, ec_member_pool)] = (model, init, fh, None)
     done = 0
     for fut in as_completed(futs):
-        model, init, fh, mem = futs[fut]
+        model, init, fh, mem = futs.pop(fut)  # pop: a finished future kept in futs holds its decoded fields (memory leak)
         done += 1
         try:
             res = fut.result()
             _save(model, init, fh, {mem: res} if mem else res)
+            del res
         except Missing as e:
             _mark_missing(model, init, fh, e)
             log(f"  missing: {model} {init:%Y%m%d%H} f{fh:03d} ({e})")

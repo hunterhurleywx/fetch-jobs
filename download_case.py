@@ -17,10 +17,10 @@ def case_tasks(conv_day, leads, models):
     hourly = [valid[0] + timedelta(hours=k) for k in range(int((valid[-1] - valid[0]).total_seconds() // 3600) + 1)]
     tasks = []
     for model in models:
-        base = model.replace("_ci", "").replace("_x", "")
+        base = model.replace("_ci", "").replace("_x", "").replace("_add", "").replace("_sfc", "")
         if base in CAM_MODELS:  # CAMs: their own Day 2-1 run pools; storm signal hourly
             cinits = sorted({i for L in leads for i in cam_pools(conv_day, L).get(base, [])})
-            times = hourly if model.endswith("_ci") else valid
+            times = hourly if model.endswith("_ci") or model == "hrrr_sfc" else valid
         else:
             cinits, times = inits, valid
         for init in cinits:

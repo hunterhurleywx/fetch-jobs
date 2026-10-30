@@ -1,5 +1,6 @@
 """Case configuration: models, fields, run pools and the common analysis grid."""
 import os
+import re
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -176,7 +177,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "")
+    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "").replace("_add", "").replace("_sfc", "")
     if model == "hrrr":
         return fh <= 18 or (init.hour % 6 == 0 and fh <= 48)
     if model == "nam":
@@ -209,3 +210,60 @@ def case_setup(conv_day, leads=(7, 6, 5)):
         issue = datetime(conv_day.year, conv_day.month, conv_day.day) - timedelta(days=d - 1)
         pools[d] = [issue - timedelta(hours=6 * k) for k in range(POOL_CYCLES)][::-1]
     return valid, pools
+
+
+# ---------------------------------------------------------------------------
+# Add-on sets (Hunter adopted the full parameter review, 31 Oct 2026; research/15_data_inventory/_recs_*.csv).
+# Cached as their own models (<model>_add, hrrr_sfc) next to the existing sets, so cached cases only fetch these.
+# NCEP/CAM entries: (VAR, level); the forecast-time label is matched flexibly (instant, 1-h max/min, acc, ave).
+# All add-on fields are optional: a field a model doesn't carry is skipped and logged, never fatal.
+# Nothing scores on these yet; they feed the sounding-parameter module and future tests.
+# ---------------------------------------------------------------------------
+LEAN_LEVELS = [1000, 975, 950, 925, 900, 850, 800, 750, 700, 600, 500, 400, 300, 250, 200]
+_COL = [(v, f"{p} mb") for v in ("TMP", "RH", "UGRD", "VGRD", "HGT") for p in LEAN_LEVELS]
+_CAM_COMMON = _COL + [("TMP", "2 m above ground"), ("UGRD", "80 m above ground"), ("VGRD", "80 m above ground"),
+                      ("PRES", "surface"), ("HGT", "surface"), ("VVEL", "850 mb"), ("VVEL", "700 mb"), ("VVEL", "500 mb"),
+                      ("CAPE", "surface"), ("CAPE", "255-0 mb above ground"), ("CIN", "surface"), ("CIN", "255-0 mb above ground"),
+                      ("PLPL", "255-0 mb above ground"), ("HPBL", "surface"), ("DSWRF", "surface"), ("LAND", "surface")]
+ADD_FIELDS = {
+    "hrrr_add": _CAM_COMMON + [("CAPE", "0-3000 m above ground"), ("MAXUVV", "100-1000 mb above ground"),
+                               ("MAXDVV", "100-1000 mb above ground"), ("MAXREF", "1000 m above ground"),
+                               ("MXUPHL", "3000-0 m above ground"), ("MXUPHL", "2000-0 m above ground"),
+                               ("MNUPHL", "5000-2000 m above ground"), ("RELV", "1000-0 m above ground"),
+                               ("HAIL", "entire atmosphere"), ("LTNG", "entire atmosphere"), ("RETOP", "cloud top"),
+                               ("REFD", "263 K level"), ("WIND", "10 m above ground"), ("MSLMA", "mean sea level"),
+                               ("SBT113", "top of atmosphere"), ("AOTK", "entire atmosphere"), ("MSTAV", "0 m underground")],
+    "nam_add": _CAM_COMMON + [("MAXUVV", "100-1000 mb"), ("MAXDVV", "100-1000 mb"), ("MAXREF", "1000 m above ground"),
+                              ("MXUPHL", "3000-0 m above ground"), ("MNUPHL", "5000-2000 m above ground"), ("LTNG", "surface"),
+                              ("RETOP", "entire atmosphere"), ("REFD", "263 K level"), ("MAXUW", "10 m above ground"),
+                              ("MAXVW", "10 m above ground"), ("MSLET", "mean sea level"), ("MSTAV", "0-1 m below ground")],
+    "rap_add": _CAM_COMMON + [("CAPE", "0-3000 m above ground"), ("MSLMA", "mean sea level"), ("TCDC", "entire atmosphere"),
+                              ("LCDC", "low cloud layer"), ("APCP", "surface"), ("ACPCP", "surface"), ("SBT113", "top of atmosphere"),
+                              ("AOTK", "entire atmosphere"), ("MSTAV", "0 m underground")],
+    "nam12_add": _CAM_COMMON + [("MSLET", "mean sea level"), ("MAXUW", "10 m above ground"), ("MAXVW", "10 m above ground"),
+                                ("APCP", "surface"), ("MSTAV", "0-1 m below ground")],
+    "hrrr_sfc": [("HAIL", "surface"), ("HAIL", "0.1 sigma level")],  # HAILCAST lives in the wrfsfc file
+    "gfs_add": [("CAPE", "surface"), ("CAPE", "255-0 mb above ground"), ("CIN", "surface"), ("CIN", "255-0 mb above ground"),
+                ("PLPL", "255-0 mb above ground"), ("PRMSL", "mean sea level"), ("UGRD", "100 m above ground"),
+                ("VGRD", "100 m above ground"), ("GUST", "surface"), ("HGT", "0C isotherm"), ("LHTFL", "surface"),
+                ("SHTFL", "surface"), ("DSWRF", "surface"), ("ULWRF", "top of atmosphere"),
+                ("SOILW", "0-0.1 m below ground"), ("SOILW", "0.1-0.4 m below ground"), ("LAND", "surface")],
+    "gefs_add": {"a": [("VVEL", "850 mb"), ("PRMSL", "mean sea level"), ("UGRD", "400 mb"), ("VGRD", "400 mb"),
+                       ("PRES", "surface"), ("DSWRF", "surface"), ("ULWRF", "top of atmosphere")],
+                 "b": [("CAPE", "surface"), ("CAPE", "255-0 mb above ground"), ("CIN", "surface"), ("PLPL", "255-0 mb above ground"),
+                       ("UGRD", "100 m above ground"), ("VGRD", "100 m above ground"), ("UGRD", "600 mb"), ("VGRD", "600 mb"),
+                       ("TMP", "600 mb"), ("TMP", "400 mb"), ("RH", "600 mb"), ("RH", "400 mb"), ("LAND", "surface")]},
+    # ECMWF open data: (param, levtype, levelist)
+    "hres_add": [("msl", "sfc", None), ("100u", "sfc", None), ("100v", "sfc", None), ("10fg", "sfc", None), ("ttr", "sfc", None),
+                 ("ssrd", "sfc", None), ("vsw", "sol", "1"), ("vsw", "sol", "2"), ("lsm", "sfc", None), ("skt", "sfc", None)],
+    "eps_add": [("w", "pl", "850"), ("msl", "sfc", None), ("100u", "sfc", None), ("100v", "sfc", None), ("10fg", "sfc", None),
+                ("ttr", "sfc", None), ("ssrd", "sfc", None)]
+               + [(p, "pl", lv) for p in ("t", "r", "u", "v") for lv in ("600", "400")],
+}
+ADD_MAX_VARS = {"MAXUVV", "MAXDVV", "MAXREF", "MXUPHL", "MNUPHL", "RELV", "HAIL", "LTNG", "RETOP", "WIND", "MAXUW", "MAXVW"}
+
+
+def add_key(var, lev):
+    """Cache key for an add-on field, e.g. ('CAPE', '255-0 mb above ground') -> 'cape_255_0mb'."""
+    lev = re.sub(r"(above ground|below ground|underground|entire atmosphere.*|mean sea level|top of atmosphere)", "", str(lev or "")).strip()
+    return re.sub(r"[^a-z0-9]+", "_", f"{var}_{lev}".lower()).strip("_")
