@@ -85,7 +85,7 @@ def member_layers(model, init, mem, valid):
         a = load(model, init, fh, mem)
         b = a if cam else load(f"{model}_x", init, fh, mem)  # CAM main files carry the extra fields
         if a is not None and b is not None:
-            main[v], extra[v] = a, b
+            main[v], extra[v] = a, (b if cam else {**a, **b})  # main fields (850 winds etc.) behind the extras
     if len(main) < 2:
         return None
     vt = sorted(main)
