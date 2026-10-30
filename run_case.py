@@ -65,14 +65,14 @@ def score_pool(model, inits, valid):
                 f = load(model, init, fh, mem)
                 if f is None:
                     continue
-                if model in MODELS:  # 850 hPa wind for v3's low-level term (v2 does not use it)
+                if model in MODELS:  # 850 hPa wind (v3, hazards) and 700/500 hPa RH (wind); v2 uses neither
                     x = load(f"{model}_x", init, fh, mem)
                     if x is not None:
-                        f.update({k: x[k] for k in ("u850", "v850") if k in x})
+                        f.update({k: x[k] for k in ("u850", "v850", "rh700", "rh500") if k in x})
                 ing = scoring.ingredients(model, f)
                 sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh),
                       "v3": scoring.score_v3(ing, fh, dz12)}
-                sc.update({h: sc["v2"] * f for h, f in scoring.hazard_factors(ing).items()})
+                sc.update(scoring.hazard_scores(ing, f, sc["v2"], dz12))
                 for s in SCHEMES:
                     out[s]["vt"][v].append(sc[s])
                     per_vt[s].append(sc[s])

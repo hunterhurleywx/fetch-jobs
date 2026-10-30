@@ -16,6 +16,7 @@
 !/ci.py
 !/calibrate.py
 !/plots.py
+!/orog_0p5.npy
 
 __pycache__/
 *.pyc

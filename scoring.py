@@ -7,6 +7,8 @@ Two schemes are implemented side by side:
 * ``v2`` -- the research-based prototype (research/01_severe_ingredients/00_synthesis.md
   section 0.4, Tier 2). It is uncalibrated; outputs are an index, not a probability.
 """
+import os
+
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
@@ -52,6 +54,7 @@ def ingredients(model, f):
         "omega": 0.5 * (f["w500"] + f["w700"]),  # Pa/s, negative = ascent
         "pwat": f["pwat"],
         "z500": f.get("z500"),
+        "dz75": dz,
     }
     if "u850" in f:  # low-level shear / LLJ (CAM main files; merged from *_x for global models)
         ing["llshear"] = np.hypot(f["u850"] - f["u10"], f["v850"] - f["v10"])
@@ -168,29 +171,150 @@ def score_v3(ing, fh, dz12=None):
 
 
 HAZARDS = ("tor", "hail", "wind")
+_OROG = None
 
 
-def hazard_factors(ing):
-    """EXPERIMENTAL (30 Oct 2026). Per-hazard modifiers (0..1) applied to the v2 environment score.
+def orography():
+    """Static terrain height (m) on the 0.5 deg grid: GFS HGT:surface averaged over each cell."""
+    global _OROG
+    if _OROG is None:
+        _OROG = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "orog_0p5.npy")).astype(float)
+    return _OROG
 
-    Raw ingredients only, no composite indices:
-      tor   low-level shear ramp(|V850-V10|, 8, 18 m/s) x low-level moisture (low-LCL proxy)
-            0.4 + 0.6 ramp(q2, 11, 14 g/kg); 0.5 x moisture where 850 hPa wind is unavailable
-      hail  mid-level lapse rate 0.3 + 0.7 ramp(lr75, 5.8, 7.5 C/km) x CAPE credit ramp(CAPE, 250, 1500)^0.5
-      wind  0.3 + 0.7 max(ramp(|V850|, 12, 25 m/s) (strong flow to mix down),
-                          ramp(CAPE, 1500, 3000) (cold-pool / MCS winds))
-    Each hazard's env x CI is calibrated against its own report type (calibrate_hazards.py).
+
+def lift_term(ing, dz12=None):
+    """v2's omega lift term, scaled by v3's 12-h 500 hPa height-fall forcing when available."""
+    omega = np.clip(gauss(ing["omega"], 150), -0.3, 0.3)
+    ln = PROFILES["v2"]["lift_neutral"]
+    lift = np.interp(omega, _LIFT_X, [1.10, 1.00, 0.80, ln, ln * 0.75, 0.20])
+    if dz12 is not None:
+        lift = lift * (0.75 + 0.5 * ramp(-gauss(dz12, 150), 30.0, 150.0))
+    return lift
+
+
+def freezing_level(f, ing):
+    """0 C height above ground (m) from 700/500 hPa T and z (research/10_hazard_forecasting/02_hail.md 4.2)."""
+    t7, t5 = f["t700"] - 273.15, f["t500"] - 273.15
+    lr = np.maximum(ing["lr75"], 3.0)
+    if "z700" in f:
+        z7 = f["z700"]
+    else:  # EPS members skip geopotential: hypsometric 700 hPa height from surface pressure
+        z7 = orography() + _RD_G * (f["t700"] + 6.0) * np.log(np.maximum(f["sp"], 70100.0) / 70000.0)
+    z5 = z7 + ing["dz75"]
+    dt = np.where(np.abs(t7 - t5) < 1e-3, 1e-3, t7 - t5)
+    z0 = np.where(t7 < 0, z7 + 1000.0 * t7 / lr, np.where(t5 < 0, z7 + (z5 - z7) * t7 / dt, z5 + 1000.0 * t5 / lr))
+    return np.maximum(z0 - orography(), 0.0)
+
+
+def tornado_env(ing, f, dz12=None):
+    """EXPERIMENTAL tornado environment, version T0 (research/10_hazard_forecasting/01_tornado.md 4.1-4.2).
+
+    Own base environment (CAPE credit saturating at 1000 J/kg, no lapse-rate bonus, deep shear 10->20 m/s,
+    v3 lift, any-severe CIN) times the tornado factor T0 = K x M x C_tor x E_sb:
+      K      low-level kinematics: max(supercell path = SRH(10 m-850 hPa, Bunkers-type motion) + |V850-V10|,
+             0.8 x LLJ/QLCS path = |V850| x |V850-V10|)
+      M      low-level moisture (cloud-base proxy) 0.2 + 0.8 ramp(q2, 9, 13 g/kg)
+      C_tor  tornado CIN 0.4 + 0.6 ramp(CIN + 100, 0, 75) (NCEP; 1 for ECMWF)
+      E_sb   surface-based share ramp(CAPE90 / CAPE180, 0.3, 0.7) where both exist (GFS, CAMs; else 1)
     """
     cape = np.clip(np.nan_to_num(ing["cape_v2"], nan=0.0), 0, None)
-    moist = 0.4 + 0.6 * ramp(ing["q2"], 11.0, 14.0)
-    if "llshear" in ing:
-        tor = ramp(ing["llshear"], 8.0, 18.0) * moist
-        flow = ramp(ing["v850"], 12.0, 25.0)
+    cin = ing["cin_v2"]
+    cin_sev = 1.0 if cin is None else ramp(200.0 + np.nan_to_num(cin, nan=0.0), 0, 150)
+    base = ramp(cape, 0, 1000.0) ** 0.5 * ramp(ing["shear"], 10.0, 20.0) * lift_term(ing, dz12) * cin_sev
+    if "u850" in f:
+        u10, v10, u8, v8, u5, v5 = f["u10"], f["v10"], f["u850"], f["v850"], f["u500"], f["v500"]
+        shu, shv = u5 - u10, v5 - v10
+        sh = np.hypot(shu, shv) + 1e-6
+        cu = (u10 + u8 + u5) / 3.0 + 7.5 * shv / sh  # 7.5 m/s to the right of the 10 m-500 hPa shear
+        cv = (v10 + v8 + v5) / 3.0 - 7.5 * shu / sh
+        srh = (u8 - cu) * (v10 - cv) - (u10 - cu) * (v8 - cv)
+        k_sc = 0.5 * ramp(srh, 40.0, 220.0) + 0.5 * ramp(ing["llshear"], 7.5, 17.5)
+        k_q = ramp(ing["v850"], 15.0, 25.0) * ramp(ing["llshear"], 10.0, 20.0)
+        k = 0.1 + 0.9 * np.maximum(k_sc, 0.8 * k_q)
     else:
-        tor, flow = 0.5 * moist, 0.5
-    hail = (0.3 + 0.7 * ramp(ing["lr75"], 5.8, 7.5)) * ramp(cape, 250.0, 1500.0) ** 0.5
-    wind = 0.3 + 0.7 * np.maximum(flow, ramp(cape, 1500.0, 3000.0))
-    return {h: gauss(np.clip(f, 0, 1), 100) for h, f in (("tor", tor), ("hail", hail), ("wind", wind))}
+        k = 0.4
+    m = 0.2 + 0.8 * ramp(ing["q2"], 9.0, 13.0)
+    c_tor = 1.0 if cin is None else 0.4 + 0.6 * ramp(np.nan_to_num(cin, nan=0.0) + 100.0, 0, 75.0)
+    e_sb = 1.0
+    if "cape90" in f and "cape180" in f:
+        c180 = np.nan_to_num(f["cape180"], nan=0.0)
+        ratio = np.nan_to_num(f["cape90"], nan=0.0) / np.maximum(c180, 1.0)
+        e_sb = np.where(c180 >= 100.0, 0.25 + 0.75 * ramp(ratio, 0.3, 0.7), 1.0)
+    return gauss(np.clip(base * k * m * c_tor * e_sb, 0, 1), 100)
+
+
+def hail_env(ing, f, v2):
+    """EXPERIMENTAL hail environment, version A (research/10_hazard_forecasting/02_hail.md 4.1-4.3).
+
+    max(v2 x H, 0.6 x E):
+      H  = L x C x S x M_lo x M_hi, with
+           L     mid-level lapse rate 0.2 + 0.8 ramp(LR75, 5.5, 7.5 C/km)
+           C     most-unstable CAPE ramp(CAPE, 0.1 s, 0.75 s)^0.5 (s = 2000 NCEP 180-0, 2500 ECMWF MU)
+           S     deep shear 0.35 + 0.65 ramp(|V500-V10|, 12, 25 m/s)
+           M_lo  shallow / cold column 0.5 + 0.5 ramp(FZL, 1500, 2500 m AGL)
+           M_hi  melting in warm, moist columns 1 - 0.5 ramp(FZL, 4200, 5200 m) ramp(PW, 30, 50 mm)
+      E  = elevated hail north of fronts (GFS / CAMs: CAPE180 - CAPE90 buoyancy above the surface layer) x L x C
+           x ramp(|V500-V850|, 12, 22 m/s) x M_lo x lift; no surface CIN or moisture term
+    """
+    s = 2000.0 if "cape180" in f else 2500.0
+    cape_mu = np.clip(np.nan_to_num(ing["cape_cur"], nan=0.0), 0, None)
+    lr = 0.2 + 0.8 * ramp(ing["lr75"], 5.5, 7.5)
+    c = ramp(cape_mu, 0.1 * s, 0.75 * s) ** 0.5
+    fzl = freezing_level(f, ing)
+    m_lo = 0.5 + 0.5 * ramp(fzl, 1500.0, 2500.0)
+    m_hi = 1.0 - 0.5 * ramp(fzl, 4200.0, 5200.0) * ramp(ing["pwat"], 30.0, 50.0)
+    h = gauss(np.clip(lr * c * (0.35 + 0.65 * ramp(ing["shear"], 12.0, 25.0)) * m_lo * m_hi, 0, 1), 100)
+    env = v2 * h
+    if "cape90" in f and "u850" in f:
+        elev = ramp(np.nan_to_num(f["cape180"], nan=0.0) - np.nan_to_num(f["cape90"], nan=0.0), 250.0, 1000.0)
+        s_el = ramp(np.hypot(f["u500"] - f["u850"], f["v500"] - f["v850"]), 12.0, 22.0)
+        e = gauss(np.clip(elev * lr * c * s_el * m_lo * lift_term(ing), 0, 1), 100)
+        env = np.maximum(env, 0.6 * e)
+    return env
+
+
+def wind_env(ing, f, dz12=None):
+    """EXPERIMENTAL damaging-wind environment, version 1 (research/10_hazard_forecasting/03_wind.md 4.2, 4.5).
+
+    Own base environment Ew = instability (CAPE credit saturating ~1000 J/kg, lapse-rate bonus) x lift x CIN
+    x moisture -- no deep-shear cut-off, so weakly sheared derechos and pulse days are not zeroed -- times
+    W1 = (0.2 + 0.8 max(A, B)) x Morg x Selev:
+      A      strong flow brought down: max(ramp(|V850|, 12.5, 25), ramp(|mean(V10, V850, V500)|, 10, 20))
+             x coupling 0.5 + 0.5 ramp(V10 . V850 / |V850|^2, 0.1, 0.4) (weak / opposed surface wind = decoupled)
+      B      cold pool: ramp(CAPE, 500, 2500 ML | 750, 3000 best/MU)^0.5 x downdraft potential
+             0.5 ramp(LR75, 6, 7.5) + 0.5 ramp(70 - mean RH700/500, 0, 40)
+      Morg   organisation 0.6 + 0.4 ramp(|V500 - V10|, 8, 20)
+      Selev  elevated storms 1 - 0.5 ramp(1 - CAPE90/CAPE180, 0.5, 0.9) where both exist (GFS, CAMs)
+    """
+    cape = np.clip(np.nan_to_num(ing["cape_v2"], nan=0.0), 0, None)
+    inst = np.clip(ramp(cape, 0, 1000.0) ** 0.5 * (1.0 + 0.5 * ramp(ing["lr75"], 6.0, 7.5)), 0, 1)
+    cin = 1.0 if ing["cin_v2"] is None else ramp(200.0 + np.nan_to_num(ing["cin_v2"], nan=0.0), 0, 150)
+    moist = 0.5 + 0.5 * ramp(ing["q2"], *PROFILES["v2"]["moist"])
+    ew = inst * lift_term(ing, dz12) * cin * moist
+    if "u850" in f:
+        u10, v10, u8, v8 = f["u10"], f["v10"], f["u850"], f["v850"]
+        um, vm = (u10 + u8 + f["u500"]) / 3.0, (v10 + v8 + f["v500"]) / 3.0
+        r10 = (u10 * u8 + v10 * v8) / np.maximum(u8 ** 2 + v8 ** 2, 1.0)
+        a = np.maximum(ramp(ing["v850"], 12.5, 25.0), ramp(np.hypot(um, vm), 10.0, 20.0)) * (0.5 + 0.5 * ramp(r10, 0.1, 0.4))
+    else:
+        a = 0.0
+    rhm = 0.5 * (f["rh700"] + f["rh500"]) if "rh700" in f and "rh500" in f else 50.0
+    d = 0.5 * ramp(ing["lr75"], 6.0, 7.5) + 0.5 * ramp(70.0 - rhm, 0, 40.0)
+    lo, hi = (500.0, 2500.0) if "cape90" in f else (750.0, 3000.0)
+    b = ramp(cape, lo, hi) ** 0.5 * d
+    morg = 0.6 + 0.4 * ramp(ing["shear"], 8.0, 20.0)
+    selev = 1.0
+    if "cape90" in f and "cape180" in f:
+        c180 = np.nan_to_num(f["cape180"], nan=0.0)
+        frac = 1.0 - np.nan_to_num(f["cape90"], nan=0.0) / np.maximum(c180, 1.0)
+        selev = np.where(c180 >= 250.0, 1.0 - 0.5 * ramp(frac, 0.5, 0.9), 1.0)
+    w = (0.2 + 0.8 * np.maximum(a, b)) * morg * selev
+    return gauss(np.clip(ew * w, 0, 1), 100)
+
+
+def hazard_scores(ing, f, v2, dz12=None):
+    """Tornado / hail / wind environment scores for one member and valid time (calibrate_hazards.py)."""
+    return {"tor": tornado_env(ing, f, dz12), "hail": hail_env(ing, f, v2), "wind": wind_env(ing, f, dz12)}
 
 
 def trimmed_mean(stack, frac=0.1):
