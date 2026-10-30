@@ -17,6 +17,7 @@
 !/calibrate.py
 !/plots.py
 !/orog_0p5.npy
+!/diag_upper.py
 
 __pycache__/
 *.pyc

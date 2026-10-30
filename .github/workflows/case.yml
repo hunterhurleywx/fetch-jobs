@@ -68,6 +68,8 @@ jobs:
         run: |
           python -u ci.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/ci.log"
           python -u ci.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --env v3 --out ci_layers_v3.npz 2>&1 | tee "cases/${{ inputs.date }}/logs/ci_v3.log"
+      - name: Upper-air diagnostics (member means per model, cycle and valid time)
+        run: python -u diag_upper.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/diag_upper.log" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
