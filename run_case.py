@@ -15,7 +15,7 @@ from config import CAM_MODELS, CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam
 from fetch import cache_path
 import scoring
 
-SCHEMES = ("current", "v2", "v3")  # v3 = experimental (scoring.score_v3)
+SCHEMES = ("current", "v2", "v3") + scoring.HAZARDS  # v3, tor/hail/wind = experimental (scoring.py)
 DIAG_KEYS = ("cape_v2", "shear", "omega", "lr75", "q2", "pwat", "z500")
 
 
@@ -72,6 +72,7 @@ def score_pool(model, inits, valid):
                 ing = scoring.ingredients(model, f)
                 sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh),
                       "v3": scoring.score_v3(ing, fh, dz12)}
+                sc.update({h: sc["v2"] * f for h, f in scoring.hazard_factors(ing).items()})
                 for s in SCHEMES:
                     out[s]["vt"][v].append(sc[s])
                     per_vt[s].append(sc[s])

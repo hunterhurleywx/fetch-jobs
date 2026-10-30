@@ -167,6 +167,32 @@ def score_v3(ing, fh, dz12=None):
     return gauss(np.clip(inst * shear * lift * cin * moist * ll, 0, 1), 100)
 
 
+HAZARDS = ("tor", "hail", "wind")
+
+
+def hazard_factors(ing):
+    """EXPERIMENTAL (30 Oct 2026). Per-hazard modifiers (0..1) applied to the v2 environment score.
+
+    Raw ingredients only, no composite indices:
+      tor   low-level shear ramp(|V850-V10|, 8, 18 m/s) x low-level moisture (low-LCL proxy)
+            0.4 + 0.6 ramp(q2, 11, 14 g/kg); 0.5 x moisture where 850 hPa wind is unavailable
+      hail  mid-level lapse rate 0.3 + 0.7 ramp(lr75, 5.8, 7.5 C/km) x CAPE credit ramp(CAPE, 250, 1500)^0.5
+      wind  0.3 + 0.7 max(ramp(|V850|, 12, 25 m/s) (strong flow to mix down),
+                          ramp(CAPE, 1500, 3000) (cold-pool / MCS winds))
+    Each hazard's env x CI is calibrated against its own report type (calibrate_hazards.py).
+    """
+    cape = np.clip(np.nan_to_num(ing["cape_v2"], nan=0.0), 0, None)
+    moist = 0.4 + 0.6 * ramp(ing["q2"], 11.0, 14.0)
+    if "llshear" in ing:
+        tor = ramp(ing["llshear"], 8.0, 18.0) * moist
+        flow = ramp(ing["v850"], 12.0, 25.0)
+    else:
+        tor, flow = 0.5 * moist, 0.5
+    hail = (0.3 + 0.7 * ramp(ing["lr75"], 5.8, 7.5)) * ramp(cape, 250.0, 1500.0) ** 0.5
+    wind = 0.3 + 0.7 * np.maximum(flow, ramp(cape, 1500.0, 3000.0))
+    return {h: gauss(np.clip(f, 0, 1), 100) for h, f in (("tor", tor), ("hail", hail), ("wind", wind))}
+
+
 def trimmed_mean(stack, frac=0.1):
     """Mean after dropping the top and bottom `frac` of members at each point."""
     n = stack.shape[0]
