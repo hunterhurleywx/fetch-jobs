@@ -14,7 +14,7 @@ import requests
 from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMBERS, GEFS_FIELDS_A,
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
-                    NCEP_UA_FIELDS, EC_UA_FIELDS,
+                    NCEP_UA_FIELDS, EC_UA_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
                     OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
@@ -249,7 +249,7 @@ def get_ecmwf(init, fh, model, pool):
     base = ec_base(init, fh, model)
     rows = [json.loads(l) for l in http_get(base + ".index").decode().splitlines() if l.strip()]
     spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS, "hres_x": EC_X_FIELDS,
-            "eps_x": EC_X_FIELDS, "eps_z": EC_Z_FIELDS, "hres_ua": EC_UA_FIELDS, "eps_ua": EC_UA_FIELDS}.get(model, EC_FIELDS)
+            "eps_x": EC_X_FIELDS, "eps_z": EC_Z_FIELDS, "hres_ua": EC_UA_FIELDS, "eps_ua": EC_UA_FIELDS, "eps_pl": EC_PL_FIELDS}.get(model, EC_FIELDS)
     have = {r["param"] for r in rows}
     spec = {k: ((EC_ALIASES[p] if p not in have and p in EC_ALIASES else p), lt, lv)
             for k, (p, lt, lv) in spec.items()}
@@ -393,7 +393,7 @@ def missing_marker(model, init, fh):
 
 def is_cached(model, init, fh):
     members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
-               "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS}.get(model, ["det"])
+               "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)
@@ -436,6 +436,11 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):
                     futs[ncep_pool.submit(get_gefs_member, init, fh, m, (("a", NCEP_UA_FIELDS),))] = (model, init, fh, m)
+        elif model == "gefs_pl":
+            for m in GEFS_MEMBERS:
+                if not os.path.exists(cache_path(model, init, fh, m)):
+                    futs[ncep_pool.submit(get_gefs_member, init, fh, m,
+                                          (("a", GEFS_PL_FIELDS_A), ("b", GEFS_PL_FIELDS_B)))] = (model, init, fh, m)
         elif model == "gefs_x":
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):

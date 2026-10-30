@@ -25,7 +25,7 @@ jobs:
       POGS_CACHE: /tmp/pogs_cache
       POGS_CASES: ${{ github.workspace }}/cases
       MAIN_MODELS: gfs gefs hres eps hrrr nam rap eps_z
-      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci gfs_ua gefs_ua hres_ua eps_ua
+      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci gfs_snd hres_snd gefs_pl eps_pl
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}

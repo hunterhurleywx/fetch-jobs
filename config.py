@@ -95,6 +95,17 @@ EC_Z_FIELDS = {"z500": ("gh", "pl", "500"), "z700": ("gh", "pl", "700")}
 # 300 hPa jet / diffluence and 700 hPa steering and mid-level flow
 NCEP_UA_FIELDS = {"u300": ("UGRD", "300 mb"), "v300": ("VGRD", "300 mb"), "u700": ("UGRD", "700 mb"), "v700": ("VGRD", "700 mb")}
 EC_UA_FIELDS = {"u300": ("u", "pl", "300"), "v300": ("v", "pl", "300"), "u700": ("u", "pl", "700"), "v700": ("v", "pl", "700")}
+# Ensemble upper air (separate cache "<model>_pl"): height, temperature, RH and wind at 7 key levels, plus
+# 2 m temperature / moisture for cloud base. GFS and HRES carry the full column instead ("gfs_snd", "hres_snd").
+ENS_PL_LEVELS = [1000, 925, 850, 700, 500, 300, 250]
+GEFS_PL_FIELDS_A = {f"{k}{lev}": (v, f"{lev} mb") for lev in ENS_PL_LEVELS
+                    for k, v in (("z", "HGT"), ("t", "TMP"), ("rh", "RH"), ("u", "UGRD"), ("v", "VGRD"))
+                    if not (lev == 300 and k in ("t", "rh"))}  # 300 mb T and RH live in the b file
+GEFS_PL_FIELDS_A.update({"t2m": ("TMP", "2 m above ground"), "rh2m": ("RH", "2 m above ground")})
+GEFS_PL_FIELDS_B = {"t300": ("TMP", "300 mb"), "rh300": ("RH", "300 mb")}
+EC_PL_FIELDS = {f"{k}{lev}": (p, "pl", str(lev)) for lev in ENS_PL_LEVELS
+                for k, p in (("z", "gh"), ("t", "t"), ("rh", "r"), ("u", "u"), ("v", "v"))}
+EC_PL_FIELDS.update({"t2m": ("2t", "sfc", None), "d2m": ("2d", "sfc", None)})
 OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp", "cp"}  # cp: ECMWF open data from 20 Oct 2026  # absent at some steps (e.g. f000)
 
 MODELS = ["gfs", "gefs", "hres", "eps"]
@@ -156,7 +167,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "")
+    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "")
     if model == "hrrr":
         return fh <= 18 or (init.hour % 6 == 0 and fh <= 48)
     if model == "nam":
