@@ -170,7 +170,7 @@ def score_v3(ing, fh, dz12=None):
     return gauss(np.clip(inst * shear * lift * cin * moist * ll, 0, 1), 100)
 
 
-HAZARDS = ("tor", "hail", "wind")
+HAZARDS = ("tor", "hail", "wind", "tor2", "hail2", "wind2")  # *2 = variants from the full-text paper review (30 Oct)
 _OROG = None
 
 
@@ -206,7 +206,7 @@ def freezing_level(f, ing):
     return np.maximum(z0 - orography(), 0.0)
 
 
-def tornado_env(ing, f, dz12=None):
+def tornado_env(ing, f, dz12=None, v=1):
     """EXPERIMENTAL tornado environment, version T0 (research/10_hazard_forecasting/01_tornado.md 4.1-4.2).
 
     Own base environment (CAPE credit saturating at 1000 J/kg, no lapse-rate bonus, deep shear 10->20 m/s,
@@ -220,7 +220,10 @@ def tornado_env(ing, f, dz12=None):
     cape = np.clip(np.nan_to_num(ing["cape_v2"], nan=0.0), 0, None)
     cin = ing["cin_v2"]
     cin_sev = 1.0 if cin is None else ramp(200.0 + np.nan_to_num(cin, nan=0.0), 0, 150)
-    base = ramp(cape, 0, 1000.0) ** 0.5 * ramp(ing["shear"], 10.0, 20.0) * lift_term(ing, dz12) * cin_sev
+    s6 = ramp(ing["shear"], 10.0, 20.0)
+    if v == 2:  # outbreaks run stronger deep shear (Anderson-Frey et al. 2018): keep adding credit to 30 m/s
+        s6 = s6 * (0.8 + 0.2 * ramp(ing["shear"], 20.0, 30.0))
+    base = ramp(cape, 0, 1000.0) ** 0.5 * s6 * lift_term(ing, dz12) * cin_sev
     if "u850" in f:
         u10, v10, u8, v8, u5, v5 = f["u10"], f["v10"], f["u850"], f["v850"], f["u500"], f["v500"]
         shu, shv = u5 - u10, v5 - v10
@@ -228,13 +231,22 @@ def tornado_env(ing, f, dz12=None):
         cu = (u10 + u8 + u5) / 3.0 + 7.5 * shv / sh  # 7.5 m/s to the right of the 10 m-500 hPa shear
         cv = (v10 + v8 + v5) / 3.0 - 7.5 * shu / sh
         srh = (u8 - cu) * (v10 - cv) - (u10 - cu) * (v8 - cv)
-        k_sc = 0.5 * ramp(srh, 40.0, 220.0) + 0.5 * ramp(ing["llshear"], 7.5, 17.5)
+        if v == 2:  # second stage: outbreak SRH01 ~350 vs isolated ~160 (Anderson-Frey 2018); HSLC shear > 17 m/s is common (King 2017)
+            k_sc = (0.5 * (0.75 * ramp(srh, 40.0, 220.0) + 0.25 * ramp(srh, 220.0, 400.0))
+                    + 0.5 * (0.75 * ramp(ing["llshear"], 7.5, 17.5) + 0.25 * ramp(ing["llshear"], 17.5, 27.5)))
+        else:
+            k_sc = 0.5 * ramp(srh, 40.0, 220.0) + 0.5 * ramp(ing["llshear"], 7.5, 17.5)
         k_q = ramp(ing["v850"], 15.0, 25.0) * ramp(ing["llshear"], 10.0, 20.0)
         k = 0.1 + 0.9 * np.maximum(k_sc, 0.8 * k_q)
     else:
         k = 0.4
     m = 0.2 + 0.8 * ramp(ing["q2"], 9.0, 13.0)
-    c_tor = 1.0 if cin is None else 0.4 + 0.6 * ramp(np.nan_to_num(cin, nan=0.0) + 100.0, 0, 75.0)
+    if cin is None:
+        c_tor = 1.0
+    elif v == 2:  # tornado yield per warned supercell by MLCIN (Davies 2004): 43 / 27 / 25 / 2 %
+        c_tor = np.interp(-np.nan_to_num(cin, nan=0.0), [0, 25, 100, 140, 200], [1.0, 1.0, 0.6, 0.5, 0.1])
+    else:
+        c_tor = 0.4 + 0.6 * ramp(np.nan_to_num(cin, nan=0.0) + 100.0, 0, 75.0)
     e_sb = 1.0
     if "cape90" in f and "cape180" in f:
         c180 = np.nan_to_num(f["cape180"], nan=0.0)
@@ -243,7 +255,7 @@ def tornado_env(ing, f, dz12=None):
     return gauss(np.clip(base * k * m * c_tor * e_sb, 0, 1), 100)
 
 
-def hail_env(ing, f, v2):
+def hail_env(ing, f, v2, v=1):
     """EXPERIMENTAL hail environment, version A (research/10_hazard_forecasting/02_hail.md 4.1-4.3).
 
     max(v2 x H, 0.6 x E):
@@ -263,7 +275,8 @@ def hail_env(ing, f, v2):
     fzl = freezing_level(f, ing)
     m_lo = 0.5 + 0.5 * ramp(fzl, 1500.0, 2500.0)
     m_hi = 1.0 - 0.5 * ramp(fzl, 4200.0, 5200.0) * ramp(ing["pwat"], 30.0, 50.0)
-    h = gauss(np.clip(lr * c * (0.35 + 0.65 * ramp(ing["shear"], 12.0, 25.0)) * m_lo * m_hi, 0, 1), 100)
+    s_hi = 30.0 if v == 2 else 25.0  # v2: deep shear keeps helping larger hail to 30 m/s (Dennis & Kumjian 2017; tentative)
+    h = gauss(np.clip(lr * c * (0.35 + 0.65 * ramp(ing["shear"], 12.0, s_hi)) * m_lo * m_hi, 0, 1), 100)
     env = v2 * h
     if "cape90" in f and "u850" in f:
         elev = ramp(np.nan_to_num(f["cape180"], nan=0.0) - np.nan_to_num(f["cape90"], nan=0.0), 250.0, 1000.0)
@@ -273,7 +286,7 @@ def hail_env(ing, f, v2):
     return env
 
 
-def wind_env(ing, f, dz12=None):
+def wind_env(ing, f, dz12=None, v=1):
     """EXPERIMENTAL damaging-wind environment, version 1 (research/10_hazard_forecasting/03_wind.md 4.2, 4.5).
 
     Own base environment Ew = instability (CAPE credit saturating ~1000 J/kg, lapse-rate bonus) x lift x CIN
@@ -296,6 +309,8 @@ def wind_env(ing, f, dz12=None):
         um, vm = (u10 + u8 + f["u500"]) / 3.0, (v10 + v8 + f["v500"]) / 3.0
         r10 = (u10 * u8 + v10 * v8) / np.maximum(u8 ** 2 + v8 ** 2, 1.0)
         a = np.maximum(ramp(ing["v850"], 12.5, 25.0), ramp(np.hypot(um, vm), 10.0, 20.0)) * (0.5 + 0.5 * ramp(r10, 0.1, 0.4))
+        if v == 2:  # big limited-instability wind days: moist low levels under strong 500 hPa ascent (Campbell et al. 2024)
+            a = a * (0.6 + 0.4 * ramp(ing["q2"], 10.0, 14.0) * ramp(-gauss(f["w500"], 150), 0.1, 0.3))
     else:
         a = 0.0
     rhm = 0.5 * (f["rh700"] + f["rh500"]) if "rh700" in f and "rh500" in f else 50.0
@@ -314,7 +329,8 @@ def wind_env(ing, f, dz12=None):
 
 def hazard_scores(ing, f, v2, dz12=None):
     """Tornado / hail / wind environment scores for one member and valid time (calibrate_hazards.py)."""
-    return {"tor": tornado_env(ing, f, dz12), "hail": hail_env(ing, f, v2), "wind": wind_env(ing, f, dz12)}
+    return {"tor": tornado_env(ing, f, dz12), "hail": hail_env(ing, f, v2), "wind": wind_env(ing, f, dz12),
+            "tor2": tornado_env(ing, f, dz12, 2), "hail2": hail_env(ing, f, v2, 2), "wind2": wind_env(ing, f, dz12, 2)}
 
 
 def trimmed_mean(stack, frac=0.1):
