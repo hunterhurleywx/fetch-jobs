@@ -135,8 +135,14 @@ def cam_pools(conv_day, lead):
     cut = datetime(conv_day.year, conv_day.month, conv_day.day) - timedelta(days=lead - 1)
     h = lambda k: cut - timedelta(hours=k)
     if lead == 1:
-        return {"hrrr": [h(18), h(12), h(6), h(0)], "nam": [h(18), h(12), h(6), h(0)],
-                "rap": [h(21), h(15), h(9), h(3)]}
+        pools = {"hrrr": [h(18), h(12), h(6), h(0)], "nam": [h(18), h(12), h(6), h(0)],
+                 "rap": [h(21), h(15), h(9), h(3)]}
+        # Real-time override, e.g. POGS_CAM_RUNS="hrrr:2026102919,2026102920;rap:2026102923"
+        # replaces those models' Day 1 runs with the newest ones (nowcast-style)
+        for part in filter(None, os.environ.get("POGS_CAM_RUNS", "").split(";")):
+            m, runs = part.split(":")
+            pools[m.strip()] = [datetime.strptime(r.strip(), "%Y%m%d%H") for r in runs.split(",")]
+        return pools
     if lead == 2:
         return {"hrrr": [h(6), h(0)], "nam": [h(12), h(6), h(0)]}
     return {}

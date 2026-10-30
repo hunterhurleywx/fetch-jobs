@@ -1,5 +1,5 @@
 name: run-case
-run-name: case ${{ inputs.date }} | ${{ inputs.leads }}
+run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}
 # Whole pipeline for one convective day in the cloud: SPC files, model fields (decoded-field cache in
 # Cloudflare R2 first, then raw downloads for whatever is missing, main fields and CI extras in
 # parallel), scoring, verification and the CI layer. New decoded fields go back to R2 so reruns skip
@@ -13,6 +13,9 @@ on:
       leads:
         description: "SPC lead days, space separated"
         default: "8 7 6 5 4 3 2 1"
+      cam_runs:
+        description: "Optional Day 1 CAM run override, e.g. hrrr:2026102919,2026102920;rap:2026102923"
+        default: ""
 
 jobs:
   case:
@@ -27,6 +30,7 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       R2_BUCKET: hhwx-model-cache
+      POGS_CAM_RUNS: ${{ inputs.cam_runs }}
     defaults:
       run:
         shell: bash  # -eo pipefail, so a failing script fails its step even through `| tee`
