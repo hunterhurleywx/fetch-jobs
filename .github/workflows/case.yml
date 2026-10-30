@@ -25,7 +25,9 @@ jobs:
       POGS_CACHE: /tmp/pogs_cache
       POGS_CASES: ${{ github.workspace }}/cases
       MAIN_MODELS: gfs gefs hres eps hrrr nam rap nam12 eps_z
-      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x gfs_snd hres_snd gefs_pl eps_pl
+      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x
+      # upper air: its own pass after main/x (memory: the 4-core runner was killed running all three at once, 30 Oct)
+      UA_MODELS: gfs_snd hres_snd gefs_pl eps_pl
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -45,7 +47,7 @@ jobs:
       - name: SPC outlooks, discussions and reports
         run: python -u fetch_spc.py "${{ inputs.date }}"
       - name: Pull decoded fields from R2
-        run: python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS
+        run: python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS $UA_MODELS
       - name: Model downloads for anything not in R2 (main fields and CI extras in parallel)
         run: |
           mkdir -p "cases/${{ inputs.date }}/logs"
@@ -60,6 +62,14 @@ jobs:
           exit $(( s1 || s2 ))
       - name: Push new decoded fields to R2
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS
+      - name: Upper-air downloads (separate, lighter pass; scoring does not need them)
+        continue-on-error: true
+        run: |
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $UA_MODELS             --ncep-workers 16 --ec-workers 8 --decode-procs 1 > "cases/${{ inputs.date }}/logs/download_ua.log" 2>&1
+          s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_ua.log"; exit $s
+      - name: Push upper-air fields to R2
+        if: always()
+        run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $UA_MODELS || true
       - name: Score
         run: python -u run_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --no-plots 2>&1 | tee "cases/${{ inputs.date }}/logs/run_case.log"
       - name: Verify (skipped for real-time cases without reports)
