@@ -91,6 +91,10 @@ EC_X_FIELDS = {"tp": ("tp", "sfc", None), "cp": ("cp", "sfc", None), "u850": ("u
                "rh700": ("r", "pl", "700"), "rh500": ("r", "pl", "500")}
 # EPS 500/700 hPa geopotential, fetched separately ("eps_z") when height maps are needed
 EC_Z_FIELDS = {"z500": ("gh", "pl", "500"), "z700": ("gh", "pl", "700")}
+# Upper-air winds (separate cache "<model>_ua", so already-cached cycles backfill cleanly):
+# 300 hPa jet / diffluence and 700 hPa steering and mid-level flow
+NCEP_UA_FIELDS = {"u300": ("UGRD", "300 mb"), "v300": ("VGRD", "300 mb"), "u700": ("UGRD", "700 mb"), "v700": ("VGRD", "700 mb")}
+EC_UA_FIELDS = {"u300": ("u", "pl", "300"), "v300": ("v", "pl", "300"), "u700": ("u", "pl", "700"), "v700": ("v", "pl", "700")}
 OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp", "cp"}  # cp: ECMWF open data from 20 Oct 2026  # absent at some steps (e.g. f000)
 
 MODELS = ["gfs", "gefs", "hres", "eps"]
@@ -152,7 +156,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "")
+    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "")
     if model == "hrrr":
         return fh <= 18 or (init.hour % 6 == 0 and fh <= 48)
     if model == "nam":
