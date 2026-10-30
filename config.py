@@ -142,7 +142,10 @@ CAM_OPTIONAL = {"uh25"}  # RAP has no UH
 CAM_MAX_KEYS = {"refc", "uh25"}
 # Day 2-1 blend: globals keep their relative weights, scaled down; CAM weights added.
 # Hunter, 30 Oct 2026: Days 2 and 1 drop the global models; only the CAMs and the NAM 12 km.
-CAM_BLEND = {2: (0.0, {"nam": 0.35, "hrrr": 0.25, "nam12": 0.25, "rap": 0.15}),
+# Day 3 pool (the newest runs before SPC's Day 3): globals plus a small NAM 12 km share (Hunter, 30 Oct: the 12Z NAM
+# runs bullish; raise its weight only once the 18Z / 00Z runs show it is any good).
+CAM_BLEND = {3: (0.95, {"nam12": 0.05}),
+             2: (0.0, {"nam": 0.35, "hrrr": 0.25, "nam12": 0.25, "rap": 0.15}),
              1: (0.0, {"hrrr": 0.40, "nam": 0.25, "rap": 0.20, "nam12": 0.15})}
 
 
@@ -161,6 +164,8 @@ def cam_pools(conv_day, lead):
         return pools
     if lead == 2:
         return {"hrrr": [h(6), h(0)], "nam": [h(12), h(6), h(0)], "rap": [h(9), h(3)], "nam12": [h(12), h(6), h(0)]}
+    if lead == 3:  # NAM 12 km runs to 84 h, so its 12Z / 18Z / 00Z runs before Day 3 issuance reach the window
+        return {"nam12": [h(12), h(6), h(0)]}
     return {}
 
 
