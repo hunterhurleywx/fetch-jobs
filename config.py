@@ -140,6 +140,9 @@ CAM_FIELDS = {
 CAM_CI_FIELDS = {"refc": ("REFC", "entire atmosphere", "inst"), "uh25": ("MXUPHL", "5000-2000 m above ground", "max")}
 CAM_OPTIONAL = {"uh25"}  # RAP has no UH
 CAM_MAX_KEYS = {"refc", "uh25"}
+# NAM 12 km is a global-type model (parameterized convection; Hunter 30 Oct 2026): its storm signal is convective
+# precip (3-h ACPCP buckets) plus mid-level RH, cached as "nam12_x", not simulated reflectivity
+NAM12_X_FIELDS = {"acpcpb": ("ACPCP", "surface", "acc3"), "rh700": ("RH", "700 mb", "inst"), "rh500": ("RH", "500 mb", "inst")}
 # Day 2-1 blend: globals keep their relative weights, scaled down; CAM weights added.
 # Hunter, 30 Oct 2026: Days 2 and 1 drop the global models; only the CAMs and the NAM 12 km.
 # Day 3 pool (the newest runs before SPC's Day 3): globals plus a small NAM 12 km share (Hunter, 30 Oct: the 12Z NAM

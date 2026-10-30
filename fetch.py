@@ -14,7 +14,7 @@ import requests
 from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMBERS, GEFS_FIELDS_A,
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
-                    NCEP_UA_FIELDS, EC_UA_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
+                    NCEP_UA_FIELDS, EC_UA_FIELDS, NAM12_X_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
                     OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
@@ -347,12 +347,12 @@ def _decode_cam(buf, use_max, sub=1):
 def cam_ranges(idx_text, spec, fh, optional=()):
     lines = [l.split(":") for l in idx_text.strip().split("\n")]
     offs = [int(p[1]) for p in lines]
-    want = {"inst": f"{fh} hour fcst", "max": f"{fh - 1}-{fh} hour max fcst"}
+    want = {"inst": f"{fh} hour fcst", "max": f"{fh - 1}-{fh} hour max fcst", "acc3": f"{fh - 3}-{fh} hour acc fcst"}
     found = {}
     for i, p in enumerate(lines):
         # sub-fields ("303.1", "303.2") share one message: it ends where the next offset differs
         nxt = next((o for o in offs[i + 1:] if o != offs[i]), None)
-        end = nxt - 1 if nxt is not None else None
+        end = nxt - 1 if nxt is not None else offs[i] + 20_000_000  # last record: read to end of file
         sub = int(p[0].split(".")[1]) if "." in p[0] else 1
         for key, (var, lev, kind) in spec.items():
             if key not in found and p[3] == var and p[4].startswith(lev) and p[5] == want[kind] and end is not None:
@@ -366,9 +366,9 @@ def cam_ranges(idx_text, spec, fh, optional=()):
 
 def get_cam(model, init, fh):
     """model: hrrr | nam | rap (environment fields) or hrrr_ci | nam_ci | rap_ci (hourly REFC / UH)."""
-    base, ci = model.replace("_ci", ""), model.endswith("_ci")
+    base, ci = model.replace("_ci", "").replace("_x", ""), model.endswith("_ci")
     url = CAM_URL[base](init, fh)
-    spec = CAM_CI_FIELDS if ci else CAM_FIELDS
+    spec = CAM_CI_FIELDS if ci else (NAM12_X_FIELDS if model == "nam12_x" else CAM_FIELDS)
     optional = CAM_OPTIONAL | ({"cape90", "cin90"} if base == "nam12" else set())  # NAM 12 km: 180-0 mb CAPE/CIN only
     wanted = cam_ranges(http_get(url + ".idx").decode(), spec, fh, optional)
     rngs = sorted({(s, e) for s, e, _ in wanted})
@@ -452,7 +452,7 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             for m in GEFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):
                     futs[ncep_pool.submit(get_gefs_member, init, fh, m)] = (model, init, fh, m)
-        elif model.replace("_ci", "") in CAM_URL:
+        elif model.replace("_ci", "") in CAM_URL or model == "nam12_x":
             futs[ncep_pool.submit(get_cam, model, init, fh)] = (model, init, fh, None)
         else:
             futs[ec_pool.submit(get_ecmwf, init, fh, model, ec_member_pool)] = (model, init, fh, None)

@@ -76,7 +76,7 @@ def cam_fired(model, init, valid):
 
 def member_layers(model, init, mem, valid):
     """P_model indicator, lift and sustain maps for one member of one run (None if incomplete)."""
-    cam = model in CAM_MODELS
+    cam = model in CAM_MODELS and model != "nam12"  # NAM 12 km: global-type convective-precip path
     main, extra = {}, {}
     for v in valid:
         fh = int((v - init).total_seconds() // 3600)
@@ -100,6 +100,11 @@ def member_layers(model, init, mem, valid):
     elif model == "gfs" and "acpcp" in extra[first] and "acpcp" in extra[last]:
         pr = extra[last]["acpcp"] - extra[first]["acpcp"]
         fired = pr >= 1.0
+    elif model == "nam12":  # 3-h convective-precip buckets at the valid times it reaches
+        buckets = [extra[v]["acpcpb"] for v in vt if extra.get(v) is not None and "acpcpb" in extra[v]]
+        if not buckets:
+            return None
+        fired = np.sum(buckets, axis=0) >= 1.0
     elif model == "gefs":
         buckets = [extra[v]["acpcpb"] for v in vt if v.hour in (0, 6) and "acpcpb" in extra[v]]
         if not buckets:
