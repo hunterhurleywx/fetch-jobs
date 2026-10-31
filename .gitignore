@@ -23,6 +23,7 @@
 !/cape_diag.py
 !/bench_download.py
 !/cam_snap.py
+!/nam_signal.py
 !/aws/
 
 __pycache__/

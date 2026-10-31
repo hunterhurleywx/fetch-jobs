@@ -73,6 +73,7 @@ step "push ECMWF parcel fields to R2" 0 python -u r2_cache.py push "$D" --leads 
 step "CAPE diagnostics (cape_diag)" 0 bash -c "python -u cape_diag.py '$D' --leads $LEADS > '$L/cape_diag.log' 2>&1"
 if [ -n "${POGS_CAM_RUNS:-}" ]; then
   step "native 3 km storm snapshots (cam_snap)" 0 bash -c "python -u cam_snap.py '$D' > '$L/cam_snap.log' 2>&1"
+  step "NAM signal vs forcing (nam_signal)" 0 bash -c "python -u nam_signal.py '$D' > '$L/nam_signal.log' 2>&1"
 fi
 step "score (run_case)" 1 bash -c "python -u run_case.py '$D' --leads $LEADS --no-plots > '$L/run_case.log' 2>&1"
 step "verify" 0 bash -c "python -u verify_case.py '$D' > '$L/verify.log' 2>&1"
