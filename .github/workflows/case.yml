@@ -32,7 +32,8 @@ jobs:
       POGS_CASES: ${{ github.workspace }}/cases
       MAIN_MODELS: gfs gefs hres eps hrrr nam rap nam12 rrfs eps_z
       X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x rrfs_ci
-      # upper air: its own pass after main/x (memory: the 4-core runner was killed running all three at once, 30 Oct)
+      # upper air: its own pass after main/x. Decode is the bottleneck on the 4-core runner (bench_download.py, 31 Oct:
+      # download saturates ~125-140 MB/s at 32-64 threads; eccodes ~10 ms / field), so every pass uses all 4 decode procs.
       UA_MODELS: gfs_snd hres_snd gefs_pl eps_pl
       # add-on sets adopted 31 Oct 2026 (config.ADD_FIELDS); EPS add-on is the heavy one, so it gets its own pass
       ADD_MODELS: gfs_add gefs_add hres_add hrrr_add nam_add rap_add nam12_add hrrr_sfc
@@ -79,7 +80,7 @@ jobs:
         if: inputs.addons != '0'
         continue-on-error: true
         run: |
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $ADD_MODELS             --ncep-workers 24 --ec-workers 8 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_add.log" 2>&1
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $ADD_MODELS             --ncep-workers 48 --ec-workers 16 --decode-procs 4 > "cases/${{ inputs.date }}/logs/download_add.log" 2>&1
           s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_add.log"; exit $s
       - name: Push add-on fields to R2
         if: always() && inputs.addons != '0'
@@ -87,7 +88,7 @@ jobs:
       - name: Upper-air downloads (separate, lighter pass; scoring does not need them)
         continue-on-error: true
         run: |
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $UA_MODELS             --ncep-workers 16 --ec-workers 8 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_ua.log" 2>&1
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $UA_MODELS             --ncep-workers 48 --ec-workers 16 --decode-procs 4 > "cases/${{ inputs.date }}/logs/download_ua.log" 2>&1
           s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_ua.log"; exit $s
       - name: Push upper-air fields to R2
         if: always()
@@ -96,7 +97,7 @@ jobs:
         if: inputs.addons != '0'
         continue-on-error: true
         run: |
-          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $EPS_ADD             --ncep-workers 8 --ec-workers 8 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_eps_add.log" 2>&1
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $EPS_ADD             --ncep-workers 16 --ec-workers 32 --decode-procs 4 > "cases/${{ inputs.date }}/logs/download_eps_add.log" 2>&1
           s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_eps_add.log"; exit $s
       - name: Push EPS add-on fields to R2
         if: always() && inputs.addons != '0'
