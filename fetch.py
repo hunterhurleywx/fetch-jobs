@@ -2,6 +2,7 @@
 import json
 from datetime import datetime
 import os
+import zipfile
 import tempfile
 import threading
 import time
@@ -510,8 +511,12 @@ def read_cached(model, init, fh, member):
     p = cache_path(model, init, fh, member)
     if not os.path.exists(p):
         return None
-    with np.load(p) as z:
-        return earth_relative(model, {k: z[k] for k in z.files})
+    try:
+        with np.load(p) as z:
+            return earth_relative(model, {k: z[k] for k in z.files})
+    except (zipfile.BadZipFile, EOFError, ValueError, OSError):  # a truncated cache file (seen 31 Oct): treat as missing
+        print(f"corrupt cache file, skipped: {p}", flush=True)
+        return None
 
 
 def missing_marker(model, init, fh):
