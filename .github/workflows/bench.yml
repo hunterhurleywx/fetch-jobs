@@ -1,0 +1,24 @@
+name: bench-download
+run-name: bench download ${{ inputs.init }} f${{ inputs.fh }}
+# Throughput benchmark (bench_download.py): byte-range download at several thread counts, and decode alone,
+# for one EPS step (Google mirror) and one GEFS step (AWS). Nothing is cached or pushed.
+on:
+  workflow_dispatch:
+    inputs:
+      init:
+        default: "2026103100"
+      fh:
+        default: "72"
+      members:
+        default: "20"
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -u bench_download.py --init ${{ inputs.init }} --fh ${{ inputs.fh }} --members ${{ inputs.members }}

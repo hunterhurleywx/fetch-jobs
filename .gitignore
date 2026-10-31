@@ -21,6 +21,7 @@
 !/coarse_parcel.py
 !/derive_parcel.py
 !/cape_diag.py
+!/bench_download.py
 
 __pycache__/
 *.pyc
