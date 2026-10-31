@@ -33,14 +33,14 @@ def runs(limit=100):
                          "databaseId,displayTitle,status,conclusion", "-L", str(limit)))
 
 
-def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt"):
+def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt", skip=""):
     """Dispatch one case and return its run id, matched by run-name."""
-    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | aws" if aws else "")
+    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | skip" if skip else "") + (" | aws" if aws else "")
     before = {r["databaseId"] for r in runs()}
     gh("workflow", "run", WORKFLOW, "-R", REPO, "-f", f"date={date}", "-f", f"leads={' '.join(leads)}",
        "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}", "-f", f"addons={addons}",
        *(["-f", f"attempts={attempts}"] if aws and attempts else []), *(["-f", f"pool_end={pool_end}"] if pool_end else []),
-       *(["-f", f"srh={srh}"] if srh != "2pt" else []))
+       *(["-f", f"srh={srh}"] if srh != "2pt" else []), *(["-f", f"skip={skip}"] if skip else []))
     while True:
         time.sleep(3)
         new = [r["databaseId"] for r in runs(30) if r["databaseId"] not in before and r["displayTitle"] == title]
@@ -91,6 +91,7 @@ def main():
     ap.add_argument("--backend", choices=["github", "aws"], default="github", help="aws: run each case on a 64-core AWS spot machine")
     ap.add_argument("--srh", default="2pt", choices=["2pt", "4a", "4b"], help="tornado helicity proxy (LM2 test); GitHub backend only")
     ap.add_argument("--pool-end", default="", help="real-time: end the global pool at this cycle (YYYYMMDDHH) instead of SPC's issue time")
+    ap.add_argument("--skip", default="", help='real-time: runs that count as missing (POGS_SKIP), e.g. "hres:2026103118,eps:2026103118"')
     ap.add_argument("--realtime", action="store_true", help="aws: on-demand machines only (never reclaimed); backfills default to spot first, then on-demand")
     ap.add_argument("--suffix", default="", help='store the .npz results as <name><suffix>.npz, e.g. "_noeccin"')
     a = ap.parse_args()
@@ -104,7 +105,7 @@ def main():
         while queue and len(active) < a.max_parallel:
             d = queue.pop(0)
             active[d] = trigger(d, a.leads, a.cam_runs, "0" if a.no_ec_cin else "1", "0" if a.no_addons else "1", a.backend == "aws",
-                                "ondemand ondemand" if a.realtime else "", a.pool_end, a.srh)
+                                "ondemand ondemand" if a.realtime else "", a.pool_end, a.srh, a.skip)
             log(f"[{d}] run {active[d]} started")
         time.sleep(30)
         status = {r["databaseId"]: r for r in runs()}
