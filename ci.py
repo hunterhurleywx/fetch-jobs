@@ -14,6 +14,9 @@ environment score):
   S        -- sustained CI: mid-level moisture (700/500 hPa RH; dry air entrains weak
               updrafts, Marquis et al. 2023) unless CAPE is large enough to overwhelm it.
   P_CI     = 0.6 P_model + 0.4 P_lift
+Time windows (Hunter, 31 Oct 2026: guidance for 21Z and 00Z as well as the whole day): the same P_model / P_lift for
+  the 6-h windows w21 = 18-00Z and w00 = 21-03Z, saved as <lead>|w21|p_model etc. (GEFS has 6-h convective-precip
+  buckets ending 00 and 06Z only, so its w00 window is 18-06Z).
 Final candidates (all uncalibrated; compared against reports):
   env              -- environment score (v2 blend) alone
   env*ci           -- env x P_CI
@@ -71,8 +74,32 @@ def cam_fired(model, init, valid):
     return hits if n >= 3 else None
 
 
-def member_layers(model, init, mem, valid):
-    """P_model indicator, lift and sustain maps for one member of one run (None if incomplete)."""
+def _fired(model, init, extra, cape_any, t0, t1, cam, valid):
+    """Did the member's convection fire between valid times t0 and t1 (bool map), or None if it cannot tell."""
+    vt = sorted(extra)
+    if t0 not in extra or t1 not in extra:
+        return None
+    if cam:
+        return cam_fired(model, init, [t0, t1])
+    if model == "gfs" and "acpcp" in extra[t0] and "acpcp" in extra[t1]:
+        return extra[t1]["acpcp"] - extra[t0]["acpcp"] >= 1.0
+    if model == "nam12":
+        b = [extra[v]["acpcpb"] for v in vt if t0 < v <= t1 and "acpcpb" in extra[v]]
+        return np.sum(b, axis=0) >= 1.0 if b else None
+    if model == "gefs":  # 6-h buckets end at 00 / 06Z: use every bucket that overlaps the window
+        b = [extra[v]["acpcpb"] for v in vt if v.hour in (0, 6) and v > t0 and v - timedelta(hours=6) < t1 and "acpcpb" in extra[v]]
+        return np.sum(b, axis=0) >= 1.0 if b else None
+    if model in ("hres", "eps") and "cp" in extra[t0] and "cp" in extra[t1]:
+        return 1000.0 * (extra[t1]["cp"] - extra[t0]["cp"]) >= 1.0
+    if model in ("hres", "eps") and "tp" in extra[t0] and "tp" in extra[t1]:
+        return (1000.0 * (extra[t1]["tp"] - extra[t0]["tp"]) >= 2.0) & (cape_any >= 250)
+    return None
+
+
+def member_layers(model, init, mem, valid, windows=None):
+    """P_model indicator, lift and sustain maps for one member of one run (None if incomplete).
+
+    windows: optional {name: (t0, t1)}; then a 4th item {name: (p_model, p_lift)} for those windows is returned."""
     cam = model in CAM_MODELS and model != "nam12"  # NAM 12 km: global-type convective-precip path
     main, extra = {}, {}
     for v in valid:
@@ -132,25 +159,48 @@ def member_layers(model, init, mem, valid):
         cape = np.nan_to_num(f.get("cape90", f.get("cape180", f.get("capemu"))))
         rh = 0.5 * (x["rh700"] + x["rh500"])
         sus.append(0.4 + 0.6 * np.maximum(ramp(rh, 30, 65), ramp(cape, 1000, 2500)))
-    return p_model, np.max(lift, axis=0), np.max(sus, axis=0)
+    if windows is None:
+        return p_model, np.max(lift, axis=0), np.max(sus, axis=0)
+    win = {}
+    for name, (t0, t1) in windows.items():
+        fw = _fired(model, init, extra, cape_any, t0, t1, cam, valid)
+        lw = [l for v, l in zip(vt, lift) if t0 <= v <= t1]
+        win[name] = (None if fw is None else maximum_filter(fw.astype(float), size=3), np.max(lw, axis=0) if lw else None)
+    return p_model, np.max(lift, axis=0), np.max(sus, axis=0), win
 
 
-def layers_for_lead(inits, valid, lead=None, cams=None):
-    """cams: {model: [inits]} for the CAMs that join this lead (config.cam_pools)."""
+WINDOWS = {"w21": (0, 2), "w00": (1, 3)}  # indices into valid (18, 21, 00, 03, 06Z): 18-00Z and 21-03Z
+
+
+def layers_for_lead(inits, valid, lead=None, cams=None, win_out=None):
+    """cams: {model: [inits]} for the CAMs that join this lead (config.cam_pools).
+
+    win_out: optional dict, filled with {name: (per_model {m: (p_model, p_lift)}, blend (p_model, p_lift))}."""
     cams = cams or {}
-    out = {}
+    windows = {n: (valid[a], valid[b]) for n, (a, b) in WINDOWS.items()}
+    out, wacc = {}, {n: {} for n in windows}
     for m in MODELS + [c for c in CAM_MODELS if c in cams]:
         acc = [[], [], []]
+        wa = {n: ([], []) for n in windows}
         for init in cams.get(m, inits):
             for mem in run_case.members_of(m):
-                r = member_layers(m, init, mem, valid)
+                r = member_layers(m, init, mem, valid, windows)
                 if r is not None:
                     for k in range(3):
                         acc[k].append(r[k])
+                    for n, (pm_w, pl_w) in r[3].items():
+                        if pm_w is not None and pl_w is not None:
+                            wa[n][0].append(pm_w)
+                            wa[n][1].append(pl_w)
         out[m] = [np.mean(a, axis=0) if a else None for a in acc]
+        for n in windows:
+            wacc[n][m] = tuple(np.mean(a, axis=0) if a else None for a in wa[n])
     blend = []
     for k in range(3):
         blend.append(scoring.blend({m: out[m][k] for m in out}, lead))
+    if win_out is not None:
+        for n in windows:
+            win_out[n] = (wacc[n], tuple(scoring.blend({m: wacc[n][m][k] for m in wacc[n]}, lead) for k in range(2)))
     return out, blend
 
 
@@ -188,10 +238,17 @@ def main():
         label = vc.report_mask(rep)
     rows, save = [], {}
     for lead in a.leads:
-        per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid, lead, cam_pools(conv_day, lead))
+        win = {}
+        per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid, lead, cam_pools(conv_day, lead), win)
         env = res[f"{a.env}|{lead}|blend|day"]
         p_ci, fin = finals(env, pm, pl, s)
         save.update({f"{lead}|p_model": pm, f"{lead}|p_lift": pl, f"{lead}|sustain": s, f"{lead}|p_ci": p_ci})
+        for n, (wm, (wpm, wpl)) in win.items():  # 18-00Z and 21-03Z storm-start layers (time-window guidance)
+            if wpm is not None and wpl is not None:
+                save.update({f"{lead}|{n}|p_model": wpm, f"{lead}|{n}|p_lift": wpl})
+            for m, (mpm, mpl) in wm.items():
+                if mpm is not None and mpl is not None:
+                    save.update({f"{lead}|{m}|{n}|p_model": mpm, f"{lead}|{m}|{n}|p_lift": mpl})
         for m, lay in per_model.items():  # each model's own layers and env x CI, for per-model maps
             env_m = res.get(f"{a.env}|{lead}|{m}|day")
             if env_m is None or any(x is None for x in lay):
