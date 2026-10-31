@@ -5,7 +5,8 @@
 
 One object per model and cycle: cache/<model>/<YYYYMMDDHH>.tar, holding that cycle's decoded 0.5 deg
 npz files (already compressed, so the tar is not). `pull` fetches the bundles this case needs that exist;
-`push` uploads bundles that are new or have gained files since the pull (a cycle first used for Day 4 can
+`push` merges into the stored bundle (never overwrites another job's files; If-Match retry) for bundles that are new
+or have gained files since the pull (a cycle first used for Day 4 can
 later gain Day 2 hours). _MISSING markers are never uploaded, so an unpublished real-time cycle is
 retried later instead of being remembered as missing.
 Credentials: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET (env). Without them it
@@ -73,16 +74,51 @@ def pull_one(s3, bucket, model, init, tries=5):
     return len(tarfile.open(fileobj=io.BytesIO(body)).getmembers())
 
 
-def push_one(s3, bucket, model, init):
+def push_one(s3, bucket, model, init, tries=6):
+    """Merge this machine's files into the stored bundle and write it back only if nobody else wrote it meanwhile.
+
+    Nearby dates share cycles (e.g. 2024-04-25/27/28 all use 2024-04-24 runs, with different forecast hours), and
+    parallel jobs each pushed their own copy, so the last job to finish overwrote the others' hours (found 31 Oct:
+    a "cached" case re-downloaded ~150 GB). Now: read the stored bundle, keep every file it has that this machine
+    lacks, and write with If-Match (If-None-Match for a new bundle); a 412 means another job got there first, so retry.
+    """
     files = local_files(model, init)
     if not files:
         return 0
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tf:
-        for p in files:
-            tf.add(p, arcname=os.path.relpath(p, CACHE_DIR).replace("\\", "/"))
-    s3.put_object(Bucket=bucket, Key=key_of(model, init), Body=buf.getvalue())
-    return len(files)
+    key = key_of(model, init)
+    names = {os.path.relpath(p, CACHE_DIR).replace("\\", "/"): p for p in files}
+    for attempt in range(tries):
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=key)
+            old, cond = obj["Body"].read(), {"IfMatch": obj["ETag"]}
+        except s3.exceptions.NoSuchKey:
+            old, cond = None, {"IfNoneMatch": "*"}
+        buf = io.BytesIO()
+        n = 0
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            for arc, p in names.items():
+                tf.add(p, arcname=arc)
+                n += 1
+            if old:
+                with tarfile.open(fileobj=io.BytesIO(old)) as ot:
+                    for m in ot.getmembers():
+                        if m.isfile() and m.name not in names:
+                            tf.addfile(m, ot.extractfile(m))
+                            n += 1
+        try:
+            s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue(), **cond)
+            return n
+        except Exception as e:  # 412 PreconditionFailed: another job wrote the bundle since we read it
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if code in ("PreconditionFailed", "412", "ConditionalRequestConflict") and attempt < tries - 1:
+                time.sleep(1 + attempt)
+                continue
+            if code in ("PreconditionFailed", "412", "ConditionalRequestConflict"):
+                raise
+            # conditional writes unsupported (old boto3 / endpoint): the merge alone still keeps others' files
+            s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue())
+            return n
+    return 0
 
 
 def main():
