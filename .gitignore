@@ -22,6 +22,7 @@
 !/derive_parcel.py
 !/cape_diag.py
 !/bench_download.py
+!/aws/
 
 __pycache__/
 *.pyc

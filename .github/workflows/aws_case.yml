@@ -1,0 +1,135 @@
+name: aws-case
+run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}${{ inputs.addons == '0' && ' | no add-ons' || '' }} | aws
+# The run-case pipeline on one big AWS spot machine (us-east-1, next to NOAA's data) instead of the 4-core runner.
+# This job only launches and watches: it signs in to AWS through GitHub's OIDC token (role hhwx-github-launcher,
+# no stored AWS keys), hands the machine its job through the private hhwx-cases bucket, waits, then publishes
+# the case folder as the same "case-<date>" artifact case.yml makes, so remote_case.py collects it unchanged.
+# The machine (aws/user_data.sh -> aws/pipeline.sh) powers itself off; the last step here terminates it regardless.
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Convective day (YYYY-MM-DD)"
+        required: true
+      leads:
+        description: "SPC lead days, space separated"
+        default: "8 7 6 5 4 3 2 1"
+      cam_runs:
+        description: "Optional CAM run override, e.g. nam12:2026103100,2026103106;rrfs:2026103100"
+        default: ""
+      ec_cin:
+        description: "1 = ECMWF CIN from derive_parcel.py; 0 = without (backtests)"
+        default: "1"
+      addons:
+        description: "1 = also the checklist add-on sets; 0 = scoring-only run"
+        default: "1"
+      types:
+        description: "Instance types to try in order"
+        default: "c7i.16xlarge c7a.16xlarge c6i.16xlarge m7i.16xlarge c6a.16xlarge"
+      market:
+        description: "spot or ondemand"
+        default: "spot"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  case:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      AWS_REGION: us-east-1
+      B: hhwx-cases
+      RUN: runs/${{ inputs.date }}-${{ github.run_id }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+          role-duration-seconds: 7200
+      - name: Hand the machine its job (private bucket; it deletes the file after reading it)
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          umask 077
+          {
+            printf 'DATE=%q\nLEADS=%q\nCAM_RUNS=%q\nEC_CIN=%q\nADDONS=%q\nSHA=%q\n' \
+              "${{ inputs.date }}" "${{ inputs.leads }}" "${{ inputs.cam_runs }}" "${{ inputs.ec_cin }}" "${{ inputs.addons }}" "$GITHUB_SHA"
+            printf 'R2_ACCESS_KEY_ID=%q\nR2_SECRET_ACCESS_KEY=%q\nR2_ENDPOINT=%q\n' "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" "$R2_ENDPOINT"
+          } > job.env
+          aws s3 cp job.env "s3://$B/$RUN/job.env" --only-show-errors
+          rm -f job.env
+      - name: Launch (first instance type / zone with capacity)
+        id: launch
+        run: |
+          AMI=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)
+          sed "s#__RUN__#$RUN#" aws/user_data.sh > ud.sh
+          MKT=""
+          if [ "${{ inputs.market }}" = "spot" ]; then
+            MKT='--instance-market-options MarketType=spot,SpotOptions={SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}'
+          fi
+          TAGS="Key=project,Value=hhwx},{Key=Name,Value=hhwx-case-${{ inputs.date }}"
+          SUBNETS=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text)
+          for T in ${{ inputs.types }}; do
+            for S in $SUBNETS; do
+              ID=$(aws ec2 run-instances --image-id "$AMI" --instance-type "$T" --subnet-id "$S" $MKT \
+                --iam-instance-profile Name=hhwx-instance-role \
+                --instance-initiated-shutdown-behavior terminate \
+                --metadata-options HttpTokens=required \
+                --block-device-mappings 'DeviceName=/dev/xvda,Ebs={VolumeSize=120,VolumeType=gp3,Iops=6000,Throughput=500,DeleteOnTermination=true}' \
+                --user-data file://ud.sh \
+                --tag-specifications "ResourceType=instance,Tags=[{$TAGS}]" "ResourceType=volume,Tags=[{$TAGS}]" \
+                  "ResourceType=network-interface,Tags=[{$TAGS}]" \
+                  $( [ -n "$MKT" ] && echo "ResourceType=spot-instances-request,Tags=[{$TAGS}]" ) \
+                --query 'Instances[0].InstanceId' --output text 2> err.txt) && break 2
+              echo "$T in $S: $(tail -c 300 err.txt)"
+            done
+          done
+          [ -n "${ID:-}" ] || { echo "no capacity / launch refused"; exit 1; }
+          echo "launched $ID ($T, ${{ inputs.market }}) at $(date -u +%H:%M:%SZ)"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+      - name: Watch the machine (log every minute) until it reports DONE / FAILED or disappears
+        run: |
+          ID=${{ steps.launch.outputs.id }}; seen=0
+          while true; do
+            sleep 60
+            if aws s3 cp "s3://$B/$RUN/log.txt" log.txt --only-show-errors 2>/dev/null; then
+              n=$(wc -l < log.txt); if [ "$n" -gt "$seen" ]; then sed -n "$((seen + 1)),${n}p" log.txt | grep -v '^+ ' || true; fi; seen=$n
+            fi
+            st=$(aws s3 cp "s3://$B/$RUN/status" - 2>/dev/null || true)
+            [ -n "$st" ] && { echo "machine status: $st"; [ "$st" = DONE ]; exit $?; }
+            state=$(aws ec2 describe-instances --instance-ids "$ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+            if [ "$state" = terminated ] || [ "$state" = shutting-down ]; then
+              sleep 20; st=$(aws s3 cp "s3://$B/$RUN/status" - 2>/dev/null || true)
+              [ -n "$st" ] && { echo "machine status: $st"; [ "$st" = DONE ]; exit $?; }
+              echo "machine gone without a status (spot interruption or the 150-min limit)"
+              aws ec2 describe-instances --instance-ids "$ID" --query 'Reservations[0].Instances[0].StateReason.Message' --output text
+              exit 1
+            fi
+          done
+      - name: Fetch the case folder
+        if: always() && steps.launch.outputs.id != ''
+        run: |
+          mkdir -p cases
+          aws s3 cp "s3://$B/$RUN/case.tar.gz" case.tar.gz --only-show-errors && tar -xzf case.tar.gz -C cases
+          aws s3 cp "s3://$B/$RUN/log.txt" "cases/${{ inputs.date }}/logs/machine.log" --only-show-errors || true
+          ls cases/${{ inputs.date }} || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: case-${{ inputs.date }}
+          path: cases/${{ inputs.date }}
+          retention-days: 3
+      - name: Terminate the machine and clear the run's files
+        if: always()
+        run: |
+          ID="${{ steps.launch.outputs.id }}"
+          [ -n "$ID" ] && aws ec2 terminate-instances --instance-ids "$ID" --query 'TerminatingInstances[0].CurrentState.Name' --output text || true
+          aws s3 rm "s3://$B/$RUN/" --recursive --only-show-errors || true
