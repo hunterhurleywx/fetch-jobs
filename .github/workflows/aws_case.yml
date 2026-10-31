@@ -30,8 +30,8 @@ on:
         description: "On-demand types for an on-demand attempt (on-demand quota is 16 vCPU)"
         default: "c7i.4xlarge c7a.4xlarge c6i.4xlarge m7i.4xlarge"
       attempts:
-        description: "Market per attempt; a spot loss relaunches the next one, which resumes from the R2 cache"
-        default: "spot spot ondemand"
+        description: "Market per attempt (Hunter, 31 Oct: on-demand by default, it is never reclaimed; spot only when asked). A lost machine relaunches the next attempt, which resumes from the R2 cache"
+        default: "ondemand ondemand"
       dry_run:
         description: "1 = only check the AWS sign-in and launch permissions (run-instances --dry-run); nothing starts"
         default: "0"
