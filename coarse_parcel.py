@@ -159,6 +159,8 @@ def _parcel(P, T, R, k0, t0, r0, p0, virtual=True, lfc="top"):
     bmf = np.nan_to_num(bm)
     cape = RD * (np.where(inside & (bmf > 0), bmf, 0) * seg).sum(0)
     cin = RD * (np.where(below & (bmf < 0), bmf, 0) * seg).sum(0)
+    plfc = np.where(has, P[np.clip(klfc, 0, K - 1), np.arange(n)], np.nan)  # LFC pressure (hPa); NaN without an LFC
+    _parcel.last_lfcp = plfc
     return np.where(has, cape, 0.0), np.where(has, cin, 0.0), pl
 
 
@@ -194,6 +196,7 @@ def coarse_cape_cin(levels, t, r, sp, t2, r2, ml_depth=100.0, dp=10.0, gap=5.0, 
     out = {}
     if "sb" in parcels:
         out["sb_cape"], out["sb_cin"], out["sb_lclp"] = _parcel(P, T, R, k0, t2, r2, sp, virtual, lfc)
+        out["sb_lfcp"] = _parcel.last_lfcp
     if "ml" in parcels:
         ml = np.isfinite(P) & (P >= sp[None] - ml_depth)
         th = T * (1000.0 / P) ** KAPPA
@@ -201,6 +204,7 @@ def coarse_cape_cin(levels, t, r, sp, t2, r2, ml_depth=100.0, dp=10.0, gap=5.0, 
         r_ml = np.nansum(np.where(ml, R, 0), 0) / ml.sum(0)
         out["ml_cape"], out["ml_cin"], out["ml_lclp"] = _parcel(
             P, T, R, k0, th_ml * (sp / 1000.0) ** KAPPA, r_ml, sp, virtual, lfc)
+        out["ml_lfcp"] = _parcel.last_lfcp
     if "mu" in parcels:
         lay = np.isfinite(P) & (P >= sp[None] - mu_depth)
         the = np.where(lay, theta_e(T, R, P), -np.inf)
@@ -224,6 +228,12 @@ def coarse_cape_cin(levels, t, r, sp, t2, r2, ml_depth=100.0, dp=10.0, gap=5.0, 
         out["bl6_cape"], out["bl6_cin"], _ = _parcel(P, T, R, pick(k6).astype(int), pick(t6), pick(r6), pick(p6), virtual, lfc)
         out["bl6_p"] = pick(p6)
     return {k: v.reshape(S) for k, v in out.items()}
+
+
+def p_to_agl(p, sp, t2):
+    """Height above ground (m) of pressure p for a column with surface pressure sp and 2 m temperature t2 (K):
+    hypsometric with a mean temperature 3 K below T2m (~6.5 K/km over the lowest ~1 km). Good to ~5% below 3 km."""
+    return RD * (t2 - 3.0) / G * np.log(sp / p)
 
 
 def sp_from_heights(levels, z, t, t2, zs):
