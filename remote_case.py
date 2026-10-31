@@ -46,8 +46,10 @@ def trigger(date, leads, cam_runs="", ec_cin="1"):
             return new[0]
 
 
-def collect(date, run_id, log=print):
-    """Download the run's artifact into cases/<date>/ (whatever the job managed to produce)."""
+def collect(date, run_id, log=print, suffix=""):
+    """Download the run's artifact into cases/<date>/ (whatever the job managed to produce).
+
+    suffix: stored as <name><suffix>.npz instead (e.g. "_noeccin" for a backtest variant), never merged into the main files."""
     with tempfile.TemporaryDirectory() as tmp:
         r = subprocess.run(["gh", "run", "download", str(run_id), "-R", REPO, "-n", f"case-{date}", "-D", tmp],
                            capture_output=True, text=True)
@@ -60,8 +62,10 @@ def collect(date, run_id, log=print):
             for f in files:
                 src = os.path.join(root, f)
                 out = os.path.join(dest, os.path.relpath(src, tmp))
+                if suffix and f.endswith(".npz"):
+                    out = out[:-4] + suffix + ".npz"
                 os.makedirs(os.path.dirname(out), exist_ok=True)
-                if f.endswith(".npz") and os.path.exists(out):
+                if f.endswith(".npz") and os.path.exists(out) and not suffix:
                     # merge, so a run with fewer leads (e.g. tonight's Day 4) keeps earlier leads' keys
                     with np.load(out) as old, np.load(src) as new:
                         merged = {k: old[k] for k in old.files}
@@ -81,6 +85,7 @@ def main():
     ap.add_argument("--max-parallel", type=int, default=20, help="GitHub runs at most 20 jobs at once (Free plan)")
     ap.add_argument("--cam-runs", default="", help='Day 1 CAM override, e.g. "hrrr:2026102919,2026102920;rap:2026102923"')
     ap.add_argument("--no-ec-cin", action="store_true", help="score ECMWF without derive_parcel.py CIN (backtests)")
+    ap.add_argument("--suffix", default="", help='store the .npz results as <name><suffix>.npz, e.g. "_noeccin"')
     a = ap.parse_args()
     log = lambda s: print(s, flush=True)
     t0 = time.time()
@@ -96,7 +101,7 @@ def main():
             r = status.get(rid)
             if r and r["status"] == "completed":
                 log(f"[{d}] {r['conclusion']} after {(time.time() - t0) / 60:.0f} min")
-                collect(d, rid, log)
+                collect(d, rid, log, a.suffix)
                 del active[d]
     log(f"all done in {(time.time() - t0) / 60:.1f} min")
 
