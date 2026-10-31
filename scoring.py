@@ -12,7 +12,7 @@ import os
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from config import CAM_BLEND, GRID_LATS
+from config import CAM_BLEND, GRID_LATS, SRH_MODE
 
 _DY_KM = 0.5 * 111.2
 _DX_KM = 0.5 * 111.2 * np.cos(np.deg2rad(37.5))  # grid spacing at mid-domain
@@ -217,6 +217,11 @@ def sb_pair(f):
     return None, None
 
 
+def _srh(levels, cu, cv):
+    """Storm-relative helicity (m2/s2) from (u, v) levels listed bottom to top: sum of the hodograph cross products."""
+    return sum((ub - cu) * (va - cv) - (ua - cu) * (vb - cv) for (ua, va), (ub, vb) in zip(levels[:-1], levels[1:]))
+
+
 def tornado_env(ing, f, dz12=None, v=1):
     """EXPERIMENTAL tornado environment, version T0 (research/10_hazard_forecasting/01_tornado.md 4.1-4.2).
 
@@ -241,10 +246,20 @@ def tornado_env(ing, f, dz12=None, v=1):
         sh = np.hypot(shu, shv) + 1e-6
         cu = (u10 + u8 + u5) / 3.0 + 7.5 * shv / sh  # 7.5 m/s to the right of the 10 m-500 hPa shear
         cv = (v10 + v8 + v5) / 3.0 - 7.5 * shu / sh
-        srh = (u8 - cu) * (v10 - cv) - (u10 - cu) * (v8 - cv)
+        srh = _srh([(u10, v10), (u8, v8)], cu, cv)
+        srh3 = None
+        if SRH_MODE in ("4a", "4b") and "u925" in f:  # LM2: use 925 hPa where it is >= 150 m above ground
+            ok925 = np.nan_to_num(f["z925"], nan=-1e4) - orography() >= 150.0
+            three = _srh([(u10, v10), (f["u925"], f["v925"]), (u8, v8)], cu, cv)
+            srh = np.where(ok925, three, srh)
+            if SRH_MODE == "4b" and "u700" in f:
+                srh3 = srh + _srh([(u8, v8), (f["u700"], f["v700"])], cu, cv)
         if v == 2:  # second stage: outbreak SRH01 ~350 vs isolated ~160 (Anderson-Frey 2018); HSLC shear > 17 m/s is common (King 2017)
             k_sc = (0.5 * (0.75 * ramp(srh, 40.0, 220.0) + 0.25 * ramp(srh, 220.0, 400.0))
                     + 0.5 * (0.75 * ramp(ing["llshear"], 7.5, 17.5) + 0.25 * ramp(ing["llshear"], 17.5, 27.5)))
+        elif srh3 is not None:  # LM2 4b: half the helicity credit from 0-1 km, half from 0-3 km (thresholds fixed beforehand)
+            k_sc = (0.5 * (0.5 * ramp(srh, 40.0, 220.0) + 0.5 * ramp(srh3, 100.0, 350.0))
+                    + 0.5 * ramp(ing["llshear"], 7.5, 17.5))
         else:
             k_sc = 0.5 * ramp(srh, 40.0, 220.0) + 0.5 * ramp(ing["llshear"], 7.5, 17.5)
         k_q = ramp(ing["v850"], 15.0, 25.0) * ramp(ing["llshear"], 10.0, 20.0)

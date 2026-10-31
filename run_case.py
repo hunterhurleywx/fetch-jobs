@@ -11,7 +11,8 @@ from datetime import datetime
 
 import numpy as np
 
-from config import CAM_MODELS, CASES_DIR, EC_CIN, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam_pools, case_setup, fh_available
+from config import (CAM_MODELS, CASES_DIR, EC_CIN, EPS_MEMBERS, GEFS_MEMBERS, MODELS, SRH_MODE, UA_SET, cam_pools,
+                    case_setup, fh_available)
 import fetch
 from fetch import cache_path
 import scoring
@@ -70,6 +71,10 @@ def score_pool(model, inits, valid):
                     pcl = load(f"{model}_pcl", init, fh, mem)
                     if pcl is not None:
                         f.update(pcl)
+                if SRH_MODE != "2pt" and model in UA_SET:  # LM2 test: 925 / 700 hPa winds for the helicity proxy
+                    ua = load(UA_SET[model], init, fh, mem if model in ("gefs", "eps") else "det")
+                    if ua is not None:
+                        f.update({k: ua[k] for k in ("u925", "v925", "z925", "u700", "v700") if k in ua})
                 ing = scoring.ingredients(model, f)
                 sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh),
                       "v3": scoring.score_v3(ing, fh, dz12)}

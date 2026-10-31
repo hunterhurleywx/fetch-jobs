@@ -112,6 +112,11 @@ OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp", "cp"}  # cp: ECMWF open 
 MODELS = ["gfs", "gefs", "hres", "eps"]
 # ECMWF CIN / surface-based share from derive_parcel.py (hres_pcl / eps_pcl); POGS_EC_CIN=0 scores without (backtests)
 EC_CIN = os.environ.get("POGS_EC_CIN", "1") != "0"
+# Tornado helicity proxy (scorecard test LM2, research/21_upper_air/02 section 7; Hunter, 31 Oct 2026). "2pt" (default,
+# live): 10 m-850 hPa. "4a": 10 m-925-850 hPa where 925 hPa is >= 150 m above ground, else 10 m-850. "4b": 4a plus a
+# 0-3 km term (10 m-925-850-700 hPa). Wind levels come from the upper-air sets (gfs_snd, hres_snd, gefs_pl, eps_pl).
+SRH_MODE = os.environ.get("POGS_SRH", "2pt")
+UA_SET = {"gfs": "gfs_snd", "hres": "hres_snd", "gefs": "gefs_pl", "eps": "eps_pl"}
 MODEL_LABELS = {"gfs": "GFS", "gefs": "GEFS", "hres": "ECMWF HRES", "eps": "ECMWF EPS", "blend": "Blend"}
 GEFS_MEMBERS = ["c00"] + [f"p{i:02d}" for i in range(1, 31)]
 # Perturbed members only (the control is the HRES configuration). Full 50 by default now
