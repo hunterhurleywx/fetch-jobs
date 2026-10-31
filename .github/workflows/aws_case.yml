@@ -26,14 +26,14 @@ on:
       types:
         description: "Spot instance types to try in order (32 vCPU while the quota is 32; 16xlarge once 64+ is approved)"
         default: "c7i.8xlarge c7a.8xlarge c6i.8xlarge m7i.8xlarge c6a.8xlarge m6i.8xlarge m7a.8xlarge r7i.8xlarge"
-      od_types:
-        description: "On-demand types for an on-demand attempt (on-demand quota is 16 vCPU)"
-        default: "c7i.4xlarge c7a.4xlarge c6i.4xlarge m7i.4xlarge"
       attempts:
         description: "Market per attempt; a lost machine relaunches the next attempt, which resumes from the R2 cache. Hunter, 31 Oct: backfills = spot first (cheaper), real-time = ondemand ondemand (remote_case.py --realtime)"
         default: "spot spot ondemand"
       pool_end:
         description: "Real-time: end every lead's global pool at this cycle (YYYYMMDDHH), e.g. today's 12Z"
+        default: ""
+      skip:
+        description: "Runs to leave out as if missing (freeze a real-time case), e.g. hres:2026103112,eps:2026103112"
         default: ""
       dry_run:
         description: "1 = only check the AWS sign-in and launch permissions (run-instances --dry-run); nothing starts"
@@ -51,6 +51,7 @@ jobs:
       AWS_REGION: us-east-1
       B: hhwx-cases
       RUN: runs/${{ inputs.date }}-${{ github.run_id }}
+      OD_TYPES: c7i.4xlarge c7a.4xlarge c6i.4xlarge m7i.4xlarge  # on-demand quota is 16 vCPU (an input slot went to skip; GitHub allows 10)
     defaults:
       run:
         shell: bash
@@ -70,8 +71,8 @@ jobs:
         run: |
           umask 077
           {
-            printf 'DATE=%q\nLEADS=%q\nCAM_RUNS=%q\nEC_CIN=%q\nADDONS=%q\nSHA=%q\nPOGS_POOL_END=%q\n' \
-              "${{ inputs.date }}" "${{ inputs.leads }}" "${{ inputs.cam_runs }}" "${{ inputs.ec_cin }}" "${{ inputs.addons }}" "$GITHUB_SHA" "${{ inputs.pool_end }}"
+            printf 'DATE=%q\nLEADS=%q\nCAM_RUNS=%q\nEC_CIN=%q\nADDONS=%q\nSHA=%q\nPOGS_POOL_END=%q\nPOGS_SKIP=%q\n' \
+              "${{ inputs.date }}" "${{ inputs.leads }}" "${{ inputs.cam_runs }}" "${{ inputs.ec_cin }}" "${{ inputs.addons }}" "$GITHUB_SHA" "${{ inputs.pool_end }}" "${{ inputs.skip }}"
             printf 'R2_ACCESS_KEY_ID=%q\nR2_SECRET_ACCESS_KEY=%q\nR2_ENDPOINT=%q\n' "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" "$R2_ENDPOINT"
           } > job.env
           aws s3 cp job.env "s3://$B/$RUN/job.env" --only-show-errors
@@ -90,7 +91,7 @@ jobs:
               MKT='--instance-market-options MarketType=spot,SpotOptions={SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}'
               SPOTTAG="ResourceType=spot-instances-request,Tags=[{$TAGS}]"
             else
-              types="${{ inputs.od_types }}"
+              types="$OD_TYPES"
             fi
             ID=""
             for T in $types; do
