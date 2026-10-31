@@ -59,7 +59,7 @@ def ingredients(model, f):
     if "u850" in f:  # low-level shear / LLJ (CAM main files; merged from *_x for global models)
         ing["llshear"] = np.hypot(f["u850"] - f["u10"], f["v850"] - f["v10"])
         ing["v850"] = np.hypot(f["u850"], f["v850"])
-    if model in ("gfs", "gefs", "hrrr", "nam", "rap", "nam12"):  # NCEP UPP fields (CAMs carry the same set)
+    if model in ("gfs", "gefs", "hrrr", "nam", "rap", "nam12", "rrfs"):  # NCEP UPP fields (CAMs carry the same set)
         ing["q2"] = 1000.0 * f["q2"]
         ing["cape_cur"], ing["cin_cur"] = f["cape180"], f["cin180"]
         if "cape90" in f:  # GFS v16+: true 90-hPa mixed layer

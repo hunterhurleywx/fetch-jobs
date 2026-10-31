@@ -24,8 +24,8 @@ jobs:
     env:
       POGS_CACHE: /tmp/pogs_cache
       POGS_CASES: ${{ github.workspace }}/cases
-      MAIN_MODELS: gfs gefs hres eps hrrr nam rap nam12 eps_z
-      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x
+      MAIN_MODELS: gfs gefs hres eps hrrr nam rap nam12 rrfs eps_z
+      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x rrfs_ci
       # upper air: its own pass after main/x (memory: the 4-core runner was killed running all three at once, 30 Oct)
       UA_MODELS: gfs_snd hres_snd gefs_pl eps_pl
       # add-on sets adopted 31 Oct 2026 (config.ADD_FIELDS); EPS add-on is the heavy one, so it gets its own pass

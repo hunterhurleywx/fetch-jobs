@@ -15,7 +15,7 @@ from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMB
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
                     NCEP_UA_FIELDS, EC_UA_FIELDS, NAM12_X_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
-                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS,
+                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS, RRFS_2D_KEYS,
                     ADD_FIELDS, ADD_MAX_VARS, add_key)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
@@ -292,7 +292,9 @@ CAM_URL = {
     "nam": lambda i, fh: f"https://noaa-nam-pds.s3.amazonaws.com/nam.{i:%Y%m%d}/nam.t{i:%H}z.conusnest.hiresf{fh:02d}.tm00.grib2",
     "rap": lambda i, fh: f"https://noaa-rap-pds.s3.amazonaws.com/rap.{i:%Y%m%d}/rap.t{i:%H}z.awp130pgrbf{fh:02d}.grib2",
     "nam12": lambda i, fh: f"https://noaa-nam-pds.s3.amazonaws.com/nam.{i:%Y%m%d}/nam.t{i:%H}z.awphys{fh:02d}.tm00.grib2",
+    "rrfs": lambda i, fh: f"https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfs.{i:%Y%m%d}/{i:%H}/rrfs.t{i:%H}z.prslev.3km.f{fh:03d}.conus.grib2",
 }
+RRFS_2D_URL = lambda i, fh: f"https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfs.{i:%Y%m%d}/{i:%H}/rrfs.t{i:%H}z.2dfld.3km.f{fh:03d}.conus.grib2"
 _lam_map = {}  # per process: grid key -> flat target-cell index of every source point (-1 = outside)
 
 
@@ -374,20 +376,30 @@ def cam_ranges(idx_text, spec, fh, optional=()):
 
 
 def get_cam(model, init, fh):
-    """model: hrrr | nam | rap (environment fields) or hrrr_ci | nam_ci | rap_ci (hourly REFC / UH)."""
+    """model: hrrr | nam | rap | nam12 | rrfs (environment fields), nam12_x, or <model>_ci (hourly REFC / UH)."""
     base, ci = model.replace("_ci", "").replace("_x", ""), model.endswith("_ci")
-    url = CAM_URL[base](init, fh)
     spec = CAM_CI_FIELDS if ci else (NAM12_X_FIELDS if model == "nam12_x" else CAM_FIELDS)
     optional = CAM_OPTIONAL | ({"cape90", "cin90"} if base == "nam12" else set())  # NAM 12 km: 180-0 mb CAPE/CIN only
-    wanted = cam_ranges(http_get(url + ".idx").decode(), spec, fh, optional)
-    rngs = sorted({(s, e) for s, e, _ in wanted})
-    with ThreadPoolExecutor(8) as ex:  # the ranges are independent; fetch them concurrently
-        blobs = dict(zip(rngs, ex.map(lambda r: http_get(url, r), rngs)))
+    if base == "rrfs":  # REFC / UH and the surface-based fields live in the 2dfld file; no VVEL, DZDT instead
+        spec = {k: (("DZDT",) + v[1:] if k in ("w500", "w700") else v) for k, v in spec.items()}
+        groups = [(RRFS_2D_URL(init, fh), {k: v for k, v in spec.items() if ci or k in RRFS_2D_KEYS})]
+        if not ci:
+            groups.append((CAM_URL[base](init, fh), {k: v for k, v in spec.items() if k not in RRFS_2D_KEYS}))
+    else:
+        groups = [(CAM_URL[base](init, fh), spec)]
     fields = {}
-    for s, e, (key, sub) in wanted:
-        b, use_max = blobs[(s, e)], key in CAM_MAX_KEYS
-        fields[key] = (DECODE_POOL.submit(_decode_cam, b, use_max, sub).result() if DECODE_POOL is not None
-                       else _decode_cam(b, use_max, sub))
+    for url, sp in groups:
+        wanted = cam_ranges(http_get(url + ".idx").decode(), sp, fh, optional)
+        rngs = sorted({(s, e) for s, e, _ in wanted})
+        with ThreadPoolExecutor(8) as ex:  # the ranges are independent; fetch them concurrently
+            blobs = dict(zip(rngs, ex.map(lambda r: http_get(url, r), rngs)))
+        for s, e, (key, sub) in wanted:
+            b, use_max = blobs[(s, e)], key in CAM_MAX_KEYS
+            fields[key] = (DECODE_POOL.submit(_decode_cam, b, use_max, sub).result() if DECODE_POOL is not None
+                           else _decode_cam(b, use_max, sub))
+    if base == "rrfs" and not ci:  # omega = -rho g w, rho = p / (Rd T)
+        for lev in (500, 700):
+            fields[f"w{lev}"] = (-(lev * 100.0) / (287.04 * fields[f"t{lev}"]) * 9.81 * fields[f"w{lev}"]).astype(np.float32)
     return {"det": fields}
 
 
@@ -460,7 +472,8 @@ def cache_path(model, init, fh, member):
 # CAM winds are grid-relative on their Lambert grids (GRIB uvRelativeToGrid = 1, checked 30 Oct 2026).
 # The cache keeps them as decoded; read_cached() rotates u/v pairs to earth-relative on the way out.
 # model: (Latin1 = Latin2 [deg], LoV [deg E]) from the GRIB headers.
-CAM_LAMBERT = {"hrrr": (38.5, 262.5), "nam": (38.5, 262.5), "rap": (25.0, 265.0), "nam12": (25.0, 265.0)}
+CAM_LAMBERT = {"hrrr": (38.5, 262.5), "nam": (38.5, 262.5), "rap": (25.0, 265.0), "nam12": (25.0, 265.0),
+               "rrfs": (38.5, 262.5)}
 
 
 def earth_relative(model, f):
