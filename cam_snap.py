@@ -6,6 +6,7 @@ The cached CAM storm fields (<model>_ci) are cell maxima on the 0.5 deg grid: en
 whether they are discrete cells or a line. This step re-reads REFC (composite reflectivity) and the 1-h max 2-5 km
 updraft helicity from each CAM run in POGS_CAM_RUNS (or the lead-3 pool), on the model's own ~3 km grid, cropped to a
 box (default southern Plains), at every hour of the convective day's 18-06Z window the run reaches.
+REFS (the RRFS ensemble, 5 members to 60 h; "refs:<runs>" in POGS_CAM_RUNS) is stored per member as refs_m001 ...
 Writes output/cam_snap.npz: "<model>|<run>|<valid>|refc" / "|uh25" (float16), plus "<model>|lat" / "|lon" per grid.
 """
 import argparse
@@ -20,6 +21,9 @@ import fetch
 from config import CAM_CI_FIELDS, CASES_DIR, cam_pools, fh_available
 
 _crop = {}
+REFS_MEMBERS = [f"m{i:03d}" for i in range(1, 6)]
+REFS_URL = lambda i, fh, mem: (f"https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfsens.{i:%Y%m%d}/{i:%H}/{mem}/"
+                               f"rrfs.t{i:%H}z.{mem}.2dfldnomads.3km.f{fh:03d}.conus.grib2")
 
 
 def _decode_native(buf, sub, box):
@@ -45,7 +49,10 @@ def _decode_native(buf, sub, box):
 
 
 def snap(model, init, fh, box):
-    url = fetch.RRFS_2D_URL(init, fh) if model == "rrfs" else fetch.CAM_URL[model](init, fh)
+    if model.startswith("refs_"):
+        url = REFS_URL(init, fh, model[5:])
+    else:
+        url = fetch.RRFS_2D_URL(init, fh) if model == "rrfs" else fetch.CAM_URL[model](init, fh)
     wanted = fetch.cam_ranges(fetch.http_get(url + ".idx").decode(), CAM_CI_FIELDS, fh, {"uh25"})
     out = {}
     for s, e, (k, sub) in wanted:
@@ -56,15 +63,17 @@ def snap(model, init, fh, box):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("date")
-    ap.add_argument("--models", nargs="+", default=["nam", "rrfs", "hrrr"])
+    ap.add_argument("--models", nargs="+", default=["nam", "rrfs", "hrrr", "refs"])
     ap.add_argument("--box", type=float, nargs=4, default=[31.0, 39.0, -104.0, -93.0])
     ap.add_argument("--hours", type=int, nargs="+", default=list(range(18, 24)) + list(range(0, 7)))
     a = ap.parse_args()
     conv = datetime.strptime(a.date, "%Y-%m-%d")
     pools = cam_pools(conv, 3)
     valid = [datetime(conv.year, conv.month, conv.day) + timedelta(days=h < 12, hours=h) for h in a.hours]
-    jobs = [(m, i, v) for m in a.models for i in pools.get(m, []) for v in valid
-            if fh_available(m, i, int((v - i).total_seconds() // 3600))]
+    reach = lambda m, i, v: (0 < int((v - i).total_seconds() // 3600) <= 60 if m == "refs"
+                             else fh_available(m, i, int((v - i).total_seconds() // 3600)))
+    jobs = [(m if m != "refs" else f"refs_{mem}", i, v) for m in a.models for i in pools.get(m, []) for v in valid
+            if reach(m, i, v) for mem in (REFS_MEMBERS if m == "refs" else [None])]
     print(f"{len(jobs)} snapshots: " + ", ".join(f"{m} {i:%d/%HZ}" for m in a.models for i in pools.get(m, [])))
 
     def one(j):
