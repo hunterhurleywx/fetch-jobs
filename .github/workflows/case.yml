@@ -107,6 +107,9 @@ jobs:
       - name: Push ECMWF parcel fields to R2
         if: always()
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $PCL_MODELS || true
+      - name: CAPE maps for display (cape_diag.py; HRES, EPS median, NAM 12 km)
+        continue-on-error: true
+        run: python -u cape_diag.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/cape_diag.log"
       - name: Score
         run: python -u run_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --no-plots 2>&1 | tee "cases/${{ inputs.date }}/logs/run_case.log"
       - name: Verify (skipped for real-time cases without reports)
