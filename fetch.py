@@ -25,6 +25,7 @@ GEFS_BUCKET = "https://noaa-gefs-pds.s3.amazonaws.com"
 # Google Cloud mirror of ECMWF open data (same paths). The AWS eu-central-1 bucket
 # throttles hard (503 SlowDown) under parallel byte-range load.
 EC_BUCKET = "https://storage.googleapis.com/ecmwf-open-data"
+EC_DIRECT = "https://data.ecmwf.int/forecasts"  # fallback when the mirror has not copied a run yet
 
 _local = threading.local()
 STATS = {"bytes": 0, "requests": 0, "retries": 0}
@@ -248,7 +249,12 @@ def ec_base(init, fh, model):
 def get_ecmwf(init, fh, model, pool):
     """Returns {member: fields}. HRES -> {'det': ...}; EPS -> {'1'..'50': ...}."""
     base = ec_base(init, fh, model)
-    rows = [json.loads(l) for l in http_get(base + ".index").decode().splitlines() if l.strip()]
+    try:
+        idx = http_get(base + ".index")
+    except Missing:  # the Google mirror lags ECMWF's own server by up to ~1 h for new runs
+        base = base.replace(EC_BUCKET, EC_DIRECT)
+        idx = http_get(base + ".index")
+    rows = [json.loads(l) for l in idx.decode().splitlines() if l.strip()]
     spec = {"eps": EC_FIELDS_EPS, "hres_snd": EC_SND_FIELDS, "hres_x": EC_X_FIELDS,
             "eps_x": EC_X_FIELDS, "eps_z": EC_Z_FIELDS, "hres_ua": EC_UA_FIELDS, "eps_ua": EC_UA_FIELDS, "eps_pl": EC_PL_FIELDS,
             "hres_add": {f"{p}{lv or ''}": (p, lt, lv) for p, lt, lv in ADD_FIELDS["hres_add"]},
