@@ -1,5 +1,5 @@
 name: run-case
-run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}
+run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}${{ inputs.addons == '0' && ' | no add-ons' || '' }}
 # Whole pipeline for one convective day in the cloud: SPC files, model fields (decoded-field cache in
 # Cloudflare R2 first, then raw downloads for whatever is missing, main fields and CI extras in
 # parallel), scoring, verification and the CI layer. New decoded fields go back to R2 so reruns skip
@@ -18,6 +18,9 @@ on:
         default: ""
       ec_cin:
         description: "1 = ECMWF gets CIN / surface-based share from derive_parcel.py; 0 = score without (backtests)"
+        default: "1"
+      addons:
+        description: "1 = also download the checklist add-on sets (scoring does not use them yet); 0 = scoring-only run"
         default: "1"
 
 jobs:
@@ -55,7 +58,9 @@ jobs:
       - name: SPC outlooks, discussions and reports
         run: python -u fetch_spc.py "${{ inputs.date }}"
       - name: Pull decoded fields from R2
-        run: python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS $UA_MODELS $ADD_MODELS $EPS_ADD $PCL_MODELS
+        run: |
+          ADD=""; if [ "${{ inputs.addons }}" != "0" ]; then ADD="$ADD_MODELS $EPS_ADD"; fi
+          python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS $UA_MODELS $ADD $PCL_MODELS
       - name: Model downloads for anything not in R2 (main fields and CI extras in parallel)
         run: |
           mkdir -p "cases/${{ inputs.date }}/logs"
@@ -71,12 +76,13 @@ jobs:
       - name: Push new decoded fields to R2
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS
       - name: Add-on downloads (adopted parameter review; scoring does not need them yet)
+        if: inputs.addons != '0'
         continue-on-error: true
         run: |
           python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $ADD_MODELS             --ncep-workers 24 --ec-workers 8 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_add.log" 2>&1
           s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_add.log"; exit $s
       - name: Push add-on fields to R2
-        if: always()
+        if: always() && inputs.addons != '0'
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $ADD_MODELS || true
       - name: Upper-air downloads (separate, lighter pass; scoring does not need them)
         continue-on-error: true
@@ -87,12 +93,13 @@ jobs:
         if: always()
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $UA_MODELS || true
       - name: EPS add-on downloads (50 members; own pass)
+        if: inputs.addons != '0'
         continue-on-error: true
         run: |
           python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $EPS_ADD             --ncep-workers 8 --ec-workers 8 --decode-procs 2 > "cases/${{ inputs.date }}/logs/download_eps_add.log" 2>&1
           s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_eps_add.log"; exit $s
       - name: Push EPS add-on fields to R2
-        if: always()
+        if: always() && inputs.addons != '0'
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $EPS_ADD || true
       - name: ECMWF CIN and surface-based share from the upper-air sets (derive_parcel.py)
         continue-on-error: true
