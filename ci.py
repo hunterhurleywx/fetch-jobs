@@ -14,9 +14,10 @@ environment score):
   S        -- sustained CI: mid-level moisture (700/500 hPa RH; dry air entrains weak
               updrafts, Marquis et al. 2023) unless CAPE is large enough to overwhelm it.
   P_CI     = 0.6 P_model + 0.4 P_lift
-Time windows (Hunter, 31 Oct 2026: guidance for 21Z and 00Z as well as the whole day): the same P_model / P_lift for
-  the 6-h windows w21 = 18-00Z and w00 = 21-03Z, saved as <lead>|w21|p_model etc. (GEFS has 6-h convective-precip
-  buckets ending 00 and 06Z only, so its w00 window is 18-06Z).
+Time blocks (Hunter, 31 Oct 2026: separate 21Z, 00Z, 03Z and 06Z guidance as well as the whole day): the same
+  P_model / P_lift for the 3-h blocks b21 = 18-21Z, b00 = 21-00Z, b03 = 00-03Z, b06 = 03-06Z, saved as
+  <lead>|b21|p_model etc. (GEFS convective precip: 3-h buckets end at 03/09/15/21Z, 6-h buckets at 00/06/12/18Z, so a
+  block ending at 00 or 06Z is the 6-h bucket minus the 3-h one.)
 Final candidates (all uncalibrated; compared against reports):
   env              -- environment score (v2 blend) alone
   env*ci           -- env x P_CI
@@ -86,9 +87,14 @@ def _fired(model, init, extra, cape_any, t0, t1, cam, valid):
     if model == "nam12":
         b = [extra[v]["acpcpb"] for v in vt if t0 < v <= t1 and "acpcpb" in extra[v]]
         return np.sum(b, axis=0) >= 1.0 if b else None
-    if model == "gefs":  # 6-h buckets end at 00 / 06Z: use every bucket that overlaps the window
-        b = [extra[v]["acpcpb"] for v in vt if v.hour in (0, 6) and v > t0 and v - timedelta(hours=6) < t1 and "acpcpb" in extra[v]]
-        return np.sum(b, axis=0) >= 1.0 if b else None
+    if model == "gefs":  # 3-h bucket at hour % 6 == 3, 6-h bucket at hour % 6 == 0 (assumes 3-h blocks)
+        if "acpcpb" not in extra[t1]:
+            return None
+        if t1.hour % 6 == 3:
+            return extra[t1]["acpcpb"] >= 1.0
+        if "acpcpb" not in extra[t0]:
+            return None
+        return extra[t1]["acpcpb"] - extra[t0]["acpcpb"] >= 1.0
     if model in ("hres", "eps") and "cp" in extra[t0] and "cp" in extra[t1]:
         return 1000.0 * (extra[t1]["cp"] - extra[t0]["cp"]) >= 1.0
     if model in ("hres", "eps") and "tp" in extra[t0] and "tp" in extra[t1]:
@@ -169,7 +175,7 @@ def member_layers(model, init, mem, valid, windows=None):
     return p_model, np.max(lift, axis=0), np.max(sus, axis=0), win
 
 
-WINDOWS = {"w21": (0, 2), "w00": (1, 3)}  # indices into valid (18, 21, 00, 03, 06Z): 18-00Z and 21-03Z
+WINDOWS = {"b21": (0, 1), "b00": (1, 2), "b03": (2, 3), "b06": (3, 4)}  # indices into valid (18, 21, 00, 03, 06Z)
 
 
 def layers_for_lead(inits, valid, lead=None, cams=None, win_out=None):
@@ -243,7 +249,7 @@ def main():
         env = res[f"{a.env}|{lead}|blend|day"]
         p_ci, fin = finals(env, pm, pl, s)
         save.update({f"{lead}|p_model": pm, f"{lead}|p_lift": pl, f"{lead}|sustain": s, f"{lead}|p_ci": p_ci})
-        for n, (wm, (wpm, wpl)) in win.items():  # 18-00Z and 21-03Z storm-start layers (time-window guidance)
+        for n, (wm, (wpm, wpl)) in win.items():  # 3-h block storm-start layers (time-block guidance)
             if wpm is not None and wpl is not None:
                 save.update({f"{lead}|{n}|p_model": wpm, f"{lead}|{n}|p_lift": wpl})
             for m, (mpm, mpl) in wm.items():
