@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import tarfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -54,11 +55,17 @@ def key_of(model, init):
     return f"cache/{model}/{init:%Y%m%d%H}.tar"
 
 
-def pull_one(s3, bucket, model, init):
-    try:
-        body = s3.get_object(Bucket=bucket, Key=key_of(model, init))["Body"].read()
-    except s3.exceptions.NoSuchKey:
-        return 0
+def pull_one(s3, bucket, model, init, tries=5):
+    for attempt in range(tries):  # a dropped stream (IncompleteRead) killed a whole case run on 31 Oct: retry it
+        try:
+            body = s3.get_object(Bucket=bucket, Key=key_of(model, init))["Body"].read()
+            break
+        except s3.exceptions.NoSuchKey:
+            return 0
+        except Exception:
+            if attempt == tries - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
     with tarfile.open(fileobj=io.BytesIO(body)) as tf:
         members = [m for m in tf.getmembers() if m.isfile()
                    and not os.path.exists(os.path.join(CACHE_DIR, m.name))]
