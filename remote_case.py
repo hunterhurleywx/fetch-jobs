@@ -33,12 +33,13 @@ def runs(limit=100):
                          "databaseId,displayTitle,status,conclusion", "-L", str(limit)))
 
 
-def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False):
+def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts=""):
     """Dispatch one case and return its run id, matched by run-name."""
     title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (" | aws" if aws else "")
     before = {r["databaseId"] for r in runs()}
     gh("workflow", "run", WORKFLOW, "-R", REPO, "-f", f"date={date}", "-f", f"leads={' '.join(leads)}",
-       "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}", "-f", f"addons={addons}")
+       "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}", "-f", f"addons={addons}",
+       *(["-f", f"attempts={attempts}"] if aws and attempts else []))
     while True:
         time.sleep(3)
         new = [r["databaseId"] for r in runs(30) if r["databaseId"] not in before and r["displayTitle"] == title]
@@ -87,6 +88,7 @@ def main():
     ap.add_argument("--no-ec-cin", action="store_true", help="score ECMWF without derive_parcel.py CIN (backtests)")
     ap.add_argument("--no-addons", action="store_true", help="skip the checklist add-on downloads (scoring-only runs, e.g. backtests)")
     ap.add_argument("--backend", choices=["github", "aws"], default="github", help="aws: run each case on a 64-core AWS spot machine")
+    ap.add_argument("--realtime", action="store_true", help="aws: on-demand machines only (never reclaimed); backfills default to spot first, then on-demand")
     ap.add_argument("--suffix", default="", help='store the .npz results as <name><suffix>.npz, e.g. "_noeccin"')
     a = ap.parse_args()
     global WORKFLOW
@@ -98,7 +100,8 @@ def main():
     while queue or active:
         while queue and len(active) < a.max_parallel:
             d = queue.pop(0)
-            active[d] = trigger(d, a.leads, a.cam_runs, "0" if a.no_ec_cin else "1", "0" if a.no_addons else "1", a.backend == "aws")
+            active[d] = trigger(d, a.leads, a.cam_runs, "0" if a.no_ec_cin else "1", "0" if a.no_addons else "1", a.backend == "aws",
+                                "ondemand ondemand" if a.realtime else "")
             log(f"[{d}] run {active[d]} started")
         time.sleep(30)
         status = {r["databaseId"]: r for r in runs()}
