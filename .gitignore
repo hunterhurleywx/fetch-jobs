@@ -24,6 +24,7 @@
 !/bench_download.py
 !/cam_snap.py
 !/nam_signal.py
+!/sfc_fields.py
 !/aws/
 
 __pycache__/
