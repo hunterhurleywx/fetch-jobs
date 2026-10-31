@@ -56,7 +56,9 @@ def spc_lead_polys(case, conv_day, lead):
     if lead >= 4:
         pats, cat = [f"day{lead}_issued_{issue:%Y%m%d}.geojson"], False
     elif lead == 3:
-        pats, cat = [f"day3_0730z_issued_{issue:%Y%m%d}_prob.geojson", "day3_0730z_*_prob.geojson"], False
+        hhmm = os.environ.get("POGS_SPC_D3", "0730")  # real-time: 1930 = SPC's afternoon Day 3 update
+        pats, cat = [f"day3_{hhmm}z_issued_{issue:%Y%m%d}_prob.geojson", f"day3_0730z_issued_{issue:%Y%m%d}_prob.geojson",
+                     "day3_0730z_*_prob.geojson"], False
     elif lead == 2:
         pats, cat = [f"day2_0600z_issued_{issue:%Y%m%d}_cat.geojson", "day2_0600z_*_cat.geojson"], True
     else:
