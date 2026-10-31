@@ -212,12 +212,17 @@ def case_setup(conv_day, leads=(7, 6, 5)):
     SPC Day N for conv_day is issued N-1 days earlier (~08Z). The newest cycle
     available then is 00Z of the issue day; the pool is the POOL_CYCLES cycles
     ending there.
+    Real-time override: POGS_POOL_END=YYYYMMDDHH makes every lead's pool end at that cycle instead (e.g. the Day 3
+    run refreshed with today's 06Z / 12Z globals before SPC's next outlook; Hunter, 31 Oct 2026).
     """
     day12 = datetime(conv_day.year, conv_day.month, conv_day.day, 12)
     valid = [day12 + timedelta(hours=h) for h in VALID_OFFSETS]
     pools = {}
+    end = os.environ.get("POGS_POOL_END", "").strip()
     for d in leads:
         issue = datetime(conv_day.year, conv_day.month, conv_day.day) - timedelta(days=d - 1)
+        if end:
+            issue = datetime.strptime(end, "%Y%m%d%H")
         pools[d] = [issue - timedelta(hours=6 * k) for k in range(POOL_CYCLES)][::-1]
     return valid, pools
 
