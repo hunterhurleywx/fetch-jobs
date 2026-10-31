@@ -29,6 +29,9 @@ on:
       market:
         description: "spot or ondemand"
         default: "spot"
+      dry_run:
+        description: "1 = only check the AWS sign-in and launch permissions (run-instances --dry-run); nothing starts"
+        default: "0"
 
 permissions:
   id-token: write
@@ -53,6 +56,7 @@ jobs:
           aws-region: us-east-1
           role-duration-seconds: 7200
       - name: Hand the machine its job (private bucket; it deletes the file after reading it)
+        if: inputs.dry_run != '1'
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -77,9 +81,14 @@ jobs:
           fi
           TAGS="Key=project,Value=hhwx},{Key=Name,Value=hhwx-case-${{ inputs.date }}"
           SUBNETS=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text)
+          if [ "${{ inputs.dry_run }}" = 1 ]; then
+            S=$(echo $SUBNETS | cut -d' ' -f1); T=$(echo ${{ inputs.types }} | cut -d' ' -f1)
+            aws sts get-caller-identity --query Arn --output text
+            DRY="--dry-run"
+          fi
           for T in ${{ inputs.types }}; do
             for S in $SUBNETS; do
-              ID=$(aws ec2 run-instances --image-id "$AMI" --instance-type "$T" --subnet-id "$S" $MKT \
+              ID=$(aws ec2 run-instances ${DRY:-} --image-id "$AMI" --instance-type "$T" --subnet-id "$S" $MKT \
                 --iam-instance-profile Name=hhwx-instance-role \
                 --instance-initiated-shutdown-behavior terminate \
                 --metadata-options HttpTokens=required \
@@ -90,12 +99,14 @@ jobs:
                   $( [ -n "$MKT" ] && echo "ResourceType=spot-instances-request,Tags=[{$TAGS}]" ) \
                 --query 'Instances[0].InstanceId' --output text 2> err.txt) && break 2
               echo "$T in $S: $(tail -c 300 err.txt)"
+              if [ -n "${DRY:-}" ]; then grep -q DryRunOperation err.txt && { echo "DRY RUN OK: sign-in, tags, PassRole and launch permissions all accepted ($T)"; exit 0; }; exit 1; fi
             done
           done
           [ -n "${ID:-}" ] || { echo "no capacity / launch refused"; exit 1; }
           echo "launched $ID ($T, ${{ inputs.market }}) at $(date -u +%H:%M:%SZ)"
           echo "id=$ID" >> "$GITHUB_OUTPUT"
       - name: Watch the machine (log every minute) until it reports DONE / FAILED or disappears
+        if: inputs.dry_run != '1'
         run: |
           ID=${{ steps.launch.outputs.id }}; seen=0
           while true; do
