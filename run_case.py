@@ -102,8 +102,10 @@ def compute(conv_day, leads, log=print):
     res = {}
     for lead, inits in pools.items():
         log(f"Day {lead}: cycles {inits[0]:%m/%d %HZ} .. {inits[-1]:%m/%d %HZ}")
-        by_model = {s: {"day": {}, "vt": {v: {} for v in valid}, "cyc": {i: {} for i in inits}} for s in SCHEMES}
         cams = cam_pools(conv_day, lead)
+        # per-cycle keys for every global cycle plus any newer CAM run (real-time POGS_CAM_RUNS overrides)
+        cyc_inits = sorted(set(inits) | {i for runs in cams.values() for i in runs})
+        by_model = {s: {"day": {}, "vt": {v: {} for v in valid}, "cyc": {i: {} for i in cyc_inits}} for s in SCHEMES}
         for model in MODELS + [m for m in CAM_MODELS if m in cams]:
             t0 = time.time()
             minits = cams.get(model, inits)
@@ -119,7 +121,7 @@ def compute(conv_day, leads, log=print):
                 res[f"n|{s}|{lead}|{model}"] = np.array(len(out[s]["day"]))
                 for v in valid:
                     by_model[s]["vt"][v][model] = combine(out[s]["vt"][v], s, model)
-                for i in inits:
+                for i in cyc_inits:
                     by_model[s]["cyc"][i][model] = combine(out[s]["cyc"].get(i, []), s, model)
             log(f"  {model:5s} {len(out['v2']['day']):4d} member-runs  {time.time() - t0:5.1f}s")
         for s in SCHEMES:
@@ -133,7 +135,7 @@ def compute(conv_day, leads, log=print):
             put("day", by_model[s]["day"])
             for v in valid:
                 put(f"vt{v:%Y%m%d%H}", by_model[s]["vt"][v])
-            for i in inits:
+            for i in cyc_inits:
                 put(f"cyc{i:%Y%m%d%H}", by_model[s]["cyc"][i])
     return res, valid, pools
 

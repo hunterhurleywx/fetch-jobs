@@ -167,17 +167,18 @@ def cam_pools(conv_day, lead):
     if lead == 1:
         pools = {"hrrr": [h(18), h(12), h(6), h(0)], "nam": [h(18), h(12), h(6), h(0)],
                  "rap": [h(21), h(15), h(9), h(3)], "nam12": [h(18), h(12), h(6), h(0)]}
-        # Real-time override, e.g. POGS_CAM_RUNS="hrrr:2026102919,2026102920;rap:2026102923"
-        # replaces those models' Day 1 runs with the newest ones (nowcast-style)
-        for part in filter(None, os.environ.get("POGS_CAM_RUNS", "").split(";")):
-            m, runs = part.split(":")
-            pools[m.strip()] = [datetime.strptime(r.strip(), "%Y%m%d%H") for r in runs.split(",")]
-        return pools
-    if lead == 2:
-        return {"hrrr": [h(6), h(0)], "nam": [h(12), h(6), h(0)], "rap": [h(9), h(3)], "nam12": [h(12), h(6), h(0)]}
-    if lead == 3:  # NAM 12 km and RRFS run to 84 h, so their 12Z / 18Z / 00Z runs before Day 3 issuance reach the window
-        return {"nam12": [h(12), h(6), h(0)], "rrfs": [h(12), h(6), h(0)]}
-    return {}
+    elif lead == 2:
+        pools = {"hrrr": [h(6), h(0)], "nam": [h(12), h(6), h(0)], "rap": [h(9), h(3)], "nam12": [h(12), h(6), h(0)]}
+    elif lead == 3:  # NAM 12 km and RRFS run to 84 h, so their 12Z / 18Z / 00Z runs before Day 3 issuance reach the window
+        pools = {"nam12": [h(12), h(6), h(0)], "rrfs": [h(12), h(6), h(0)]}
+    else:
+        return {}
+    # Real-time override, e.g. POGS_CAM_RUNS="nam12:2026103012,2026103018,2026103100,2026103106;rrfs:..."
+    # replaces those models' runs with the newest ones, for whichever lead is being run (nowcast-style)
+    for part in filter(None, os.environ.get("POGS_CAM_RUNS", "").split(";")):
+        m, runs = part.split(":")
+        pools[m.strip()] = [datetime.strptime(r.strip(), "%Y%m%d%H") for r in runs.split(",")]
+    return pools
 
 
 def fh_available(model, init, fh):
