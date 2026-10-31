@@ -155,7 +155,8 @@ NAM12_X_FIELDS = {"acpcpb": ("ACPCP", "surface", "acc3"), "rh700": ("RH", "700 m
 # Day 3 pool (the newest runs before SPC's Day 3): globals plus a small NAM 12 km share (Hunter, 30 Oct: the 12Z NAM
 # runs bullish; raise its weight only once the 18Z / 00Z runs show it is any good).
 # Hunter, 31 Oct: RRFS (and the NAM) only barely weighted at Day 3: near the end of their range and jumpy.
-CAM_BLEND = {3: (0.92, {"nam12": 0.04, "rrfs": 0.04}),
+# NAM 3 km joins Day 3 only through a POGS_CAM_RUNS override (its 60 h runs reach the window from the issue-day 12Z on).
+CAM_BLEND = {3: (0.92, {"nam12": 0.04, "rrfs": 0.04, "nam": 0.04}),
              2: (0.0, {"nam": 0.35, "hrrr": 0.25, "nam12": 0.25, "rap": 0.15}),
              1: (0.0, {"hrrr": 0.40, "nam": 0.25, "rap": 0.20, "nam12": 0.15})}
 

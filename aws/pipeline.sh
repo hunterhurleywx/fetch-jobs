@@ -71,6 +71,9 @@ step "push upper air / add-ons to R2" 0 python -u r2_cache.py push "$D" --leads 
 step "ECMWF CIN / surface-based share (derive_parcel)" 0 bash -c "python -u derive_parcel.py '$D' --leads $LEADS --procs $N > '$L/derive_parcel.log' 2>&1"
 step "push ECMWF parcel fields to R2" 0 python -u r2_cache.py push "$D" --leads $LEADS --models $PCL_MODELS
 step "CAPE diagnostics (cape_diag)" 0 bash -c "python -u cape_diag.py '$D' --leads $LEADS > '$L/cape_diag.log' 2>&1"
+if [ -n "${POGS_CAM_RUNS:-}" ]; then
+  step "native 3 km storm snapshots (cam_snap)" 0 bash -c "python -u cam_snap.py '$D' > '$L/cam_snap.log' 2>&1"
+fi
 step "score (run_case)" 1 bash -c "python -u run_case.py '$D' --leads $LEADS --no-plots > '$L/run_case.log' 2>&1"
 step "verify" 0 bash -c "python -u verify_case.py '$D' > '$L/verify.log' 2>&1"
 step "CI layer" 1 bash -c "python -u ci.py '$D' --leads $LEADS > '$L/ci.log' 2>&1 && python -u ci.py '$D' --leads $LEADS --env v3 --out ci_layers_v3.npz > '$L/ci_v3.log' 2>&1"
