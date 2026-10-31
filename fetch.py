@@ -493,8 +493,20 @@ def earth_relative(model, f):
     return f
 
 
+# Freeze a real-time case to the data already used (Hunter, 31 Oct 2026: "use what we have"): POGS_SKIP="hres:2026103112,
+# eps:2026103112" makes those runs (and all their extra sets: _x, _snd, _pl, _pcl ...) count as missing: never
+# downloaded, never scored.
+SKIP = {tuple(x.split(":")) for x in filter(None, os.environ.get("POGS_SKIP", "").replace(" ", "").split(","))}
+
+
+def skipped(model, init):
+    return bool(SKIP) and (model.split("_")[0], f"{init:%Y%m%d%H}") in SKIP
+
+
 def read_cached(model, init, fh, member):
     """Cached field dict (earth-relative winds for CAMs), or None."""
+    if skipped(model, init):
+        return None
     p = cache_path(model, init, fh, member)
     if not os.path.exists(p):
         return None
@@ -507,6 +519,8 @@ def missing_marker(model, init, fh):
 
 
 def is_cached(model, init, fh):
+    if skipped(model, init):
+        return True
     members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
                "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS,
                "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS, "eps_pcl": EPS_MEMBERS}.get(model, ["det"])
