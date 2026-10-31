@@ -100,6 +100,7 @@ def main():
             out[f"eps|{init:%Y%m%d%H}|{v:%Y%m%d%H}|n"] = np.array(len(mem))
         print(f"eps {init:%Y%m%d%H}: {len(mem)} members", flush=True)
     dst = os.path.join(CASES_DIR, a.date, "output", "cape_diag.npz")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)  # runs before scoring, which creates output/
     np.savez_compressed(dst, **out)
     print(f"-> {dst} ({len(out)} arrays)")
 
