@@ -31,7 +31,7 @@ from scipy.ndimage import maximum_filter
 
 import run_case
 import scoring
-from config import CAM_MODELS, CASES_DIR, GRID_LATS, MODELS, cam_pools, case_setup, fh_available
+from config import CAM_MODELS, CASES_DIR, EC_CIN, GRID_LATS, MODELS, cam_pools, case_setup, fh_available
 import fetch
 from fetch import cache_path
 
@@ -80,6 +80,10 @@ def member_layers(model, init, mem, valid):
         if not fh_available(model, init, fh):
             continue
         a = load(model, init, fh, mem)
+        if EC_CIN and a is not None and model in ("hres", "eps"):  # ECMWF ML90 CIN for the lift term (derive_parcel.py)
+            pcl = load(f"{model}_pcl", init, fh, mem)
+            if pcl is not None:
+                a.update(pcl)
         b = a if cam else load(f"{model}_x", init, fh, mem)  # CAM main files carry the extra fields
         if a is not None and b is not None:
             main[v], extra[v] = a, (b if cam else {**a, **b})  # main fields (850 winds etc.) behind the extras

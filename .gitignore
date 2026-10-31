@@ -18,6 +18,8 @@
 !/plots.py
 !/orog_0p5.npy
 !/diag_upper.py
+!/coarse_parcel.py
+!/derive_parcel.py
 
 __pycache__/
 *.pyc

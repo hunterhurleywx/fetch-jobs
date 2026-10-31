@@ -509,7 +509,7 @@ def missing_marker(model, init, fh):
 def is_cached(model, init, fh):
     members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
                "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS,
-               "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS}.get(model, ["det"])
+               "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS, "eps_pcl": EPS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)

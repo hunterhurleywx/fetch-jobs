@@ -70,7 +70,8 @@ def ingredients(model, f):
         ing["q2"] = q_from_td(f["d2m"], f["sp"])
         cape = np.nan_to_num(f["capemu"], nan=0.0)
         ing["cape_cur"], ing["cin_cur"] = cape, None
-        ing["cape_v2"], ing["cin_v2"], ing["cape_scale"] = cape, None, 2500.0
+        # ML90 CIN from the upper-air sets (derive_parcel.py, hres_pcl / eps_pcl), when merged in; else no CIN term
+        ing["cape_v2"], ing["cin_v2"], ing["cape_scale"] = cape, f.get("cin90"), 2500.0
     return ing
 
 
@@ -206,6 +207,16 @@ def freezing_level(f, ing):
     return np.maximum(z0 - orography(), 0.0)
 
 
+def sb_pair(f):
+    """(mixed-layer CAPE, best-parcel CAPE) for the surface-based share: NCEP UPP cape90 / cape180, or ECMWF's
+    mlcape90 / bpcape from derive_parcel.py (same definitions). (None, None) when neither is available."""
+    if "cape90" in f and "cape180" in f:
+        return f["cape90"], f["cape180"]
+    if "mlcape90" in f and "bpcape" in f:
+        return f["mlcape90"], f["bpcape"]
+    return None, None
+
+
 def tornado_env(ing, f, dz12=None, v=1):
     """EXPERIMENTAL tornado environment, version T0 (research/10_hazard_forecasting/01_tornado.md 4.1-4.2).
 
@@ -248,9 +259,10 @@ def tornado_env(ing, f, dz12=None, v=1):
     else:
         c_tor = 0.4 + 0.6 * ramp(np.nan_to_num(cin, nan=0.0) + 100.0, 0, 75.0)
     e_sb = 1.0
-    if "cape90" in f and "cape180" in f:
-        c180 = np.nan_to_num(f["cape180"], nan=0.0)
-        ratio = np.nan_to_num(f["cape90"], nan=0.0) / np.maximum(c180, 1.0)
+    ml, bp = sb_pair(f)
+    if ml is not None:
+        c180 = np.nan_to_num(bp, nan=0.0)
+        ratio = np.nan_to_num(ml, nan=0.0) / np.maximum(c180, 1.0)
         e_sb = np.where(c180 >= 100.0, 0.25 + 0.75 * ramp(ratio, 0.3, 0.7), 1.0)
     return gauss(np.clip(base * k * m * c_tor * e_sb, 0, 1), 100)
 
@@ -319,9 +331,10 @@ def wind_env(ing, f, dz12=None, v=1):
     b = ramp(cape, lo, hi) ** 0.5 * d
     morg = 0.6 + 0.4 * ramp(ing["shear"], 8.0, 20.0)
     selev = 1.0
-    if "cape90" in f and "cape180" in f:
-        c180 = np.nan_to_num(f["cape180"], nan=0.0)
-        frac = 1.0 - np.nan_to_num(f["cape90"], nan=0.0) / np.maximum(c180, 1.0)
+    ml, bp = sb_pair(f)
+    if ml is not None:
+        c180 = np.nan_to_num(bp, nan=0.0)
+        frac = 1.0 - np.nan_to_num(ml, nan=0.0) / np.maximum(c180, 1.0)
         selev = np.where(c180 >= 250.0, 1.0 - 0.5 * ramp(frac, 0.5, 0.9), 1.0)
     w = (0.2 + 0.8 * np.maximum(a, b)) * morg * selev
     return gauss(np.clip(ew * w, 0, 1), 100)

@@ -11,7 +11,7 @@ from datetime import datetime
 
 import numpy as np
 
-from config import CAM_MODELS, CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam_pools, case_setup, fh_available
+from config import CAM_MODELS, CASES_DIR, EC_CIN, EPS_MEMBERS, GEFS_MEMBERS, MODELS, cam_pools, case_setup, fh_available
 import fetch
 from fetch import cache_path
 import scoring
@@ -66,6 +66,10 @@ def score_pool(model, inits, valid):
                     x = load(f"{model}_x", init, fh, mem)
                     if x is not None:
                         f.update({k: x[k] for k in ("u850", "v850", "rh700", "rh500") if k in x})
+                if EC_CIN and model in ("hres", "eps"):  # ECMWF CIN / surface-based share (derive_parcel.py)
+                    pcl = load(f"{model}_pcl", init, fh, mem)
+                    if pcl is not None:
+                        f.update(pcl)
                 ing = scoring.ingredients(model, f)
                 sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh),
                       "v3": scoring.score_v3(ing, fh, dz12)}

@@ -33,12 +33,12 @@ def runs(limit=100):
                          "databaseId,displayTitle,status,conclusion", "-L", str(limit)))
 
 
-def trigger(date, leads, cam_runs=""):
+def trigger(date, leads, cam_runs="", ec_cin="1"):
     """Dispatch one case and return its run id, matched by run-name."""
-    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "")
+    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "")
     before = {r["databaseId"] for r in runs()}
     gh("workflow", "run", WORKFLOW, "-R", REPO, "-f", f"date={date}", "-f", f"leads={' '.join(leads)}",
-       "-f", f"cam_runs={cam_runs}")
+       "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}")
     while True:
         time.sleep(3)
         new = [r["databaseId"] for r in runs(30) if r["databaseId"] not in before and r["displayTitle"] == title]
@@ -80,6 +80,7 @@ def main():
     ap.add_argument("--leads", nargs="+", default=["8", "7", "6", "5", "4", "3", "2", "1"])
     ap.add_argument("--max-parallel", type=int, default=20, help="GitHub runs at most 20 jobs at once (Free plan)")
     ap.add_argument("--cam-runs", default="", help='Day 1 CAM override, e.g. "hrrr:2026102919,2026102920;rap:2026102923"')
+    ap.add_argument("--no-ec-cin", action="store_true", help="score ECMWF without derive_parcel.py CIN (backtests)")
     a = ap.parse_args()
     log = lambda s: print(s, flush=True)
     t0 = time.time()
@@ -87,7 +88,7 @@ def main():
     while queue or active:
         while queue and len(active) < a.max_parallel:
             d = queue.pop(0)
-            active[d] = trigger(d, a.leads, a.cam_runs)
+            active[d] = trigger(d, a.leads, a.cam_runs, "0" if a.no_ec_cin else "1")
             log(f"[{d}] run {active[d]} started")
         time.sleep(30)
         status = {r["databaseId"]: r for r in runs()}

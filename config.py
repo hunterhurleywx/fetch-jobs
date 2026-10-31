@@ -110,6 +110,8 @@ EC_PL_FIELDS.update({"t2m": ("2t", "sfc", None), "d2m": ("2d", "sfc", None)})
 OPTIONAL_X = {"apcp", "acpcp", "apcpb", "acpcpb", "tp", "cp"}  # cp: ECMWF open data from 20 Oct 2026  # absent at some steps (e.g. f000)
 
 MODELS = ["gfs", "gefs", "hres", "eps"]
+# ECMWF CIN / surface-based share from derive_parcel.py (hres_pcl / eps_pcl); POGS_EC_CIN=0 scores without (backtests)
+EC_CIN = os.environ.get("POGS_EC_CIN", "1") != "0"
 MODEL_LABELS = {"gfs": "GFS", "gefs": "GEFS", "hres": "ECMWF HRES", "eps": "ECMWF EPS", "blend": "Blend"}
 GEFS_MEMBERS = ["c00"] + [f"p{i:02d}" for i in range(1, 31)]
 # Perturbed members only (the control is the HRES configuration). Full 50 by default now
@@ -182,7 +184,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "").replace("_add", "").replace("_sfc", "")
+    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "").replace("_add", "").replace("_sfc", "").replace("_pcl", "")
     if model == "hrrr":
         return fh <= 18 or (init.hour % 6 == 0 and fh <= 48)
     if model == "nam":
