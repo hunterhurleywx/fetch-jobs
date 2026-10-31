@@ -45,9 +45,18 @@ def nam12(init, fh):
     t2 = a.get(add_key("TMP", "2 m above ground"))
     if len(lv) < 8 or sp is None or t2 is None or "q2" not in m:
         return None
-    t = np.stack([a[add_key("TMP", f"{l} mb")] for l in lv])
+    t = np.stack([a[add_key("TMP", f"{l} mb")] for l in lv]).astype(float)
     r = np.stack([cp.r_from_rh(a[add_key("RH", f"{l} mb")], a[add_key("TMP", f"{l} mb")], l) for l in lv])
-    return cp.coarse_cape_cin(lv, t, r, np.asarray(sp, float) / 100.0, t2, cp.r_from_q(m["q2"]), **KW)
+    sp, t2, r2 = np.asarray(sp, float) / 100.0, np.asarray(t2, float), cp.r_from_q(np.asarray(m["q2"], float))
+    ok = np.isfinite(sp) & np.isfinite(t2) & np.isfinite(r2) & np.isfinite(t).all(0) & np.isfinite(r).all(0)
+    o = cp.coarse_cape_cin(lv, t[:, ok], r[:, ok], sp[ok], t2[ok], r2[ok], **KW)  # NAM grid ends inside our domain
+    return {k: _fill(ok, v) for k, v in o.items()}
+
+
+def _fill(ok, v):
+    full = np.full(ok.shape, np.nan, np.float32)
+    full[ok] = v
+    return full
 
 
 def newest(model, inits, valid, probe):
