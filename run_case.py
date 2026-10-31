@@ -74,7 +74,9 @@ def score_pool(model, inits, valid):
                 if SRH_MODE != "2pt" and model in UA_SET:  # LM2 test: 925 / 700 hPa winds for the helicity proxy
                     ua = load(UA_SET[model], init, fh, mem if model in ("gefs", "eps") else "det")
                     if ua is not None:
-                        f.update({k: ua[k] for k in ("u925", "v925", "z925", "u700", "v700") if k in ua})
+                        shp = f["u10"].shape  # gfs_snd / hres_snd are 0.25 deg (same corner): every other point is the 0.5 deg grid
+                        f.update({k: (ua[k] if ua[k].shape == shp else ua[k][::2, ::2]) for k in ("u925", "v925", "z925", "u700", "v700")
+                                  if k in ua and (ua[k].shape == shp or ua[k][::2, ::2].shape == shp)})
                 ing = scoring.ingredients(model, f)
                 sc = {"current": scoring.score_current(ing, fh), "v2": scoring.score_v2(ing, fh),
                       "v3": scoring.score_v3(ing, fh, dz12)}
