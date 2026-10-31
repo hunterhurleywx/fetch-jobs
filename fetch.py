@@ -571,7 +571,9 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
                 if not os.path.exists(cache_path(model, init, fh, m)):
                     futs[ncep_pool.submit(get_add, model, init, fh, m)] = (model, init, fh, m)
         elif model in ("gfs_add", "hrrr_add", "nam_add", "rap_add", "nam12_add", "hrrr_sfc"):
-            futs[ncep_pool.submit(get_add, model, init, fh)] = (model, init, fh, None)
+            # deterministic: get_add returns a flat field dict, so it is saved as member "det" (31 Oct fix: these were
+            # passed to _save ungrouped and every one failed, silently, since the add-on pass is continue-on-error)
+            futs[ncep_pool.submit(get_add, model, init, fh)] = (model, init, fh, "det")
         elif model.replace("_ci", "") in CAM_URL or model == "nam12_x":
             futs[ncep_pool.submit(get_cam, model, init, fh)] = (model, init, fh, None)
         else:
