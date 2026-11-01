@@ -16,7 +16,7 @@ from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMB
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
                     NCEP_UA_FIELDS, EC_UA_FIELDS, NAM12_X_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
-                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS, RRFS_2D_KEYS,
+                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS, RRFS_2D_KEYS, REFS_MEMBERS,
                     ADD_FIELDS, ADD_MAX_VARS, add_key)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
@@ -296,6 +296,16 @@ CAM_URL = {
     "rrfs": lambda i, fh: f"https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfs.{i:%Y%m%d}/{i:%H}/rrfs.t{i:%H}z.prslev.3km.f{fh:03d}.conus.grib2",
 }
 RRFS_2D_URL = lambda i, fh: f"https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfs.{i:%Y%m%d}/{i:%H}/rrfs.t{i:%H}z.2dfld.3km.f{fh:03d}.conus.grib2"
+REFS_URL = lambda kind, i, fh, mem: (f"https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfsens.{i:%Y%m%d}/{i:%H}/{mem}/"
+                                     f"rrfs.t{i:%H}z.{mem}.{kind}nomads.3km.f{fh:03d}.conus.grib2")
+# REFS members: surface-based CAPE/CIN stand in for the mixed-layer pair (the members have nothing else); 2 m humidity
+# from 2 m dewpoint and surface pressure; 500/700 hPa omega borrowed from the RRFS control run in read_cached().
+REFS_2D = {"cape180": ("CAPE", "surface", "inst"), "cin180": ("CIN", "surface", "inst"),
+           "u10": ("UGRD", "10 m above ground", "inst"), "v10": ("VGRD", "10 m above ground", "inst"),
+           "pwat": ("PWAT", "entire atmosphere", "inst"), "td2": ("DPT", "2 m above ground", "inst"),
+           "psfc": ("PRES", "surface", "inst")}
+REFS_PRS = {k: v for k, v in CAM_FIELDS.items()
+            if k in ("z500", "z700", "t500", "t700", "u500", "v500", "u850", "v850", "rh700", "rh500")}
 _lam_map = {}  # per process: grid key -> flat target-cell index of every source point (-1 = outside)
 
 
@@ -374,6 +384,25 @@ def cam_ranges(idx_text, spec, fh, optional=()):
         raise Missing(f"fields {missing} f{fh}")
     # one request per distinct byte range (u and v of a packed pair share it)
     return sorted(found.values(), key=lambda r: (r[0], r[2][1]))
+
+
+def get_refs_member(model, init, fh, mem):
+    """One REFS member at one hour: refs (environment) or refs_ci (hourly REFC / UH)."""
+    if model == "refs_ci":
+        groups = [(REFS_URL("2dfld", init, fh, mem), CAM_CI_FIELDS)]
+    else:
+        groups = [(REFS_URL("2dfld", init, fh, mem), REFS_2D), (REFS_URL("prslev", init, fh, mem), REFS_PRS)]
+    fields = {}
+    for url, sp in groups:
+        wanted = cam_ranges(http_get(url + ".idx").decode(), sp, fh, CAM_OPTIONAL)
+        for s, e, (key, sub) in wanted:
+            fields[key] = _decode_cam(http_get(url, (s, e)), key in CAM_MAX_KEYS, sub)
+    if model == "refs":
+        td = fields.pop("td2") - 273.15
+        e = 6.112 * np.exp(17.67 * td / (td + 243.5))  # hPa
+        p = fields.pop("psfc") / 100.0
+        fields["q2"] = (0.622 * e / (p - 0.378 * e)).astype(np.float32)  # kg/kg, like SPFH 2 m
+    return fields
 
 
 def get_cam(model, init, fh):
@@ -474,7 +503,7 @@ def cache_path(model, init, fh, member):
 # The cache keeps them as decoded; read_cached() rotates u/v pairs to earth-relative on the way out.
 # model: (Latin1 = Latin2 [deg], LoV [deg E]) from the GRIB headers.
 CAM_LAMBERT = {"hrrr": (38.5, 262.5), "nam": (38.5, 262.5), "rap": (25.0, 265.0), "nam12": (25.0, 265.0),
-               "rrfs": (38.5, 262.5)}
+               "rrfs": (38.5, 262.5), "refs": (38.5, 262.5)}
 
 
 def earth_relative(model, f):
@@ -504,6 +533,9 @@ def skipped(model, init):
     return bool(SKIP) and (model.split("_")[0], f"{init:%Y%m%d%H}") in SKIP
 
 
+_REFS_W_WARNED = set()
+
+
 def read_cached(model, init, fh, member):
     """Cached field dict (earth-relative winds for CAMs), or None."""
     if skipped(model, init):
@@ -513,10 +545,20 @@ def read_cached(model, init, fh, member):
         return None
     try:
         with np.load(p) as z:
-            return earth_relative(model, {k: z[k] for k in z.files})
+            f = earth_relative(model, {k: z[k] for k in z.files})
     except (zipfile.BadZipFile, EOFError, ValueError, OSError):  # a truncated cache file (seen 31 Oct): treat as missing
         print(f"corrupt cache file, skipped: {p}", flush=True)
         return None
+    if model == "refs" and "w500" not in f:  # members have no vertical velocity: use the RRFS control run's omega
+        ctl = read_cached("rrfs", init, fh, "det")
+        if ctl is not None and "w500" in ctl:
+            f["w500"], f["w700"] = ctl["w500"], ctl["w700"]
+        else:
+            f["w500"] = f["w700"] = np.zeros_like(f["pwat"])  # neutral: no ascent signal
+            if init not in _REFS_W_WARNED:
+                _REFS_W_WARNED.add(init)
+                print(f"REFS {init:%Y%m%d%H}: no RRFS control omega cached; lift term neutral", flush=True)
+    return f
 
 
 def missing_marker(model, init, fh):
@@ -528,7 +570,8 @@ def is_cached(model, init, fh):
         return True
     members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
                "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS,
-               "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS, "eps_pcl": EPS_MEMBERS}.get(model, ["det"])
+               "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS, "eps_pcl": EPS_MEMBERS,
+               "refs": REFS_MEMBERS, "refs_ci": REFS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)
@@ -593,6 +636,10 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             # deterministic: get_add returns a flat field dict, so it is saved as member "det" (31 Oct fix: these were
             # passed to _save ungrouped and every one failed, silently, since the add-on pass is continue-on-error)
             futs[ncep_pool.submit(get_add, model, init, fh)] = (model, init, fh, "det")
+        elif model in ("refs", "refs_ci"):
+            for m in REFS_MEMBERS:
+                if not os.path.exists(cache_path(model, init, fh, m)):
+                    futs[ncep_pool.submit(get_refs_member, model, init, fh, m)] = (model, init, fh, m)
         elif model.replace("_ci", "") in CAM_URL or model == "nam12_x":
             futs[ncep_pool.submit(get_cam, model, init, fh)] = (model, init, fh, None)
         else:

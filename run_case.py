@@ -11,7 +11,7 @@ from datetime import datetime
 
 import numpy as np
 
-from config import (CAM_MODELS, CASES_DIR, EC_CIN, EPS_MEMBERS, GEFS_MEMBERS, MODELS, SRH_MODE, UA_SET, cam_pools,
+from config import (CAM_MODELS, CASES_DIR, EC_CIN, EPS_MEMBERS, GEFS_MEMBERS, MODELS, REFS_MEMBERS, SRH_MODE, UA_SET, cam_pools,
                     case_setup, fh_available)
 import fetch
 from fetch import cache_path
@@ -22,7 +22,7 @@ DIAG_KEYS = ("cape_v2", "shear", "omega", "lr75", "q2", "pwat", "z500")
 
 
 def members_of(model):
-    return {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS}.get(model, ["det"])  # deterministic: GFS, HRES, CAMs
+    return {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "refs": REFS_MEMBERS}.get(model, ["det"])  # deterministic: GFS, HRES, CAMs
 
 
 def load(model, init, fh, member):
@@ -101,7 +101,7 @@ def score_pool(model, inits, valid):
 def combine(lst, scheme, model):
     if not lst:
         return None
-    return scoring.pool_combine(np.stack(lst), scheme, model not in ("gefs", "eps"))
+    return scoring.pool_combine(np.stack(lst), scheme, model not in ("gefs", "eps", "refs"))
 
 
 def compute(conv_day, leads, log=print):

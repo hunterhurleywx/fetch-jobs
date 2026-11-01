@@ -131,7 +131,10 @@ EC_FIELDS_EPS = {k: v for k, v in EC_FIELDS.items() if k not in ("z500", "z700")
 # the 0.5 deg grid: mean for environment fields, max for REFC / UH (a storm anywhere in the cell).
 # key -> (VAR, level prefix, kind); kind "inst" = "<fh> hour fcst", "max" = "<fh-1>-<fh> hour max fcst"
 # ---------------------------------------------------------------------------
-CAM_MODELS = ["hrrr", "nam", "rap", "nam12", "rrfs"]  # nam = NAM 3 km nest; nam12 = NAM 12 km (awphys, to 84 h)
+CAM_MODELS = ["hrrr", "nam", "rap", "nam12", "rrfs", "refs"]  # nam = NAM 3 km nest; nam12 = NAM 12 km (awphys, to 84 h)
+# refs = REFS (RRFS ensemble) perturbed members m001-m005 (AWS rrfsens.*; 00/06/12/18Z to 60 h; Hunter 1 Nov 2026: "REFS
+# should be in now"). Members carry surface-based CAPE/CIN only and no vertical velocity (research/23_cam_sources).
+REFS_MEMBERS = [f"m{i:03d}" for i in range(1, 6)]
 # rrfs = RRFS v1 deterministic, 3 km CONUS Lambert (same projection as the HRRR), to 84 h at 00/06/12/18Z.
 # Two files per hour: these keys come from the 2dfld file, the rest from prslev. It has no VVEL: w500/w700
 # come from DZDT (m/s) converted to omega (Pa/s) in fetch.get_cam.
@@ -198,6 +201,8 @@ def fh_available(model, init, fh):
         return fh <= 60
     if model == "nam12":  # awphys: hourly to 36 h, then 3-hourly to 84 h
         return fh <= 84 and (fh <= 36 or fh % 3 == 0)
+    if model == "refs":  # members: hourly to 60 h at 00/06/12/18Z
+        return init.hour % 6 == 0 and fh <= 60
     if model == "rrfs":  # hourly; 84 h at 00/06/12/18Z, 18 h otherwise
         return fh <= (84 if init.hour % 6 == 0 else 18)
     if model == "rap":

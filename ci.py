@@ -60,13 +60,13 @@ def ramp(x, lo, hi):
 CAM_DBZ = 40.0  # CAM "storm fired": composite reflectivity >= 40 dBZ anywhere in the cell, any hour
 
 
-def cam_fired(model, init, valid):
+def cam_fired(model, init, valid, mem="det"):
     """Explicit-convection indicator from the hourly 18Z-06Z REFC files (None if too few hours)."""
     hits, n = None, 0
     t, end = valid[0], valid[-1]
     while t <= end:
         fh = int((t - init).total_seconds() // 3600)
-        r = load(f"{model}_ci", init, fh, "det") if fh_available(model, init, fh) else None
+        r = load(f"{model}_ci", init, fh, mem) if fh_available(model, init, fh) else None
         if r is not None:
             f = np.nan_to_num(r["refc"], nan=-99) >= CAM_DBZ
             hits = f if hits is None else (hits | f)
@@ -75,13 +75,13 @@ def cam_fired(model, init, valid):
     return hits if n >= 3 else None
 
 
-def _fired(model, init, extra, cape_any, t0, t1, cam, valid):
+def _fired(model, init, extra, cape_any, t0, t1, cam, valid, mem="det"):
     """Did the member's convection fire between valid times t0 and t1 (bool map), or None if it cannot tell."""
     vt = sorted(extra)
     if t0 not in extra or t1 not in extra:
         return None
     if cam:
-        return cam_fired(model, init, [t0, t1])
+        return cam_fired(model, init, [t0, t1], mem)
     if model == "gfs" and "acpcp" in extra[t0] and "acpcp" in extra[t1]:
         return extra[t1]["acpcp"] - extra[t0]["acpcp"] >= 1.0
     if model == "nam12":
@@ -128,7 +128,7 @@ def member_layers(model, init, mem, valid, windows=None):
     cape_any = np.max([np.nan_to_num(main[v].get("cape90", main[v].get("cape180", main[v].get("capemu"))))
                        for v in vt], axis=0)
     if cam:
-        fired = cam_fired(model, init, valid)
+        fired = cam_fired(model, init, valid, mem)
         if fired is None:
             return None
     elif model == "gfs" and "acpcp" in extra[first] and "acpcp" in extra[last]:
@@ -169,7 +169,7 @@ def member_layers(model, init, mem, valid, windows=None):
         return p_model, np.max(lift, axis=0), np.max(sus, axis=0)
     win = {}
     for name, (t0, t1) in windows.items():
-        fw = _fired(model, init, extra, cape_any, t0, t1, cam, valid)
+        fw = _fired(model, init, extra, cape_any, t0, t1, cam, valid, mem)
         lw = [l for v, l in zip(vt, lift) if t0 <= v <= t1]
         win[name] = (None if fw is None else maximum_filter(fw.astype(float), size=3), np.max(lw, axis=0) if lw else None)
     return p_model, np.max(lift, axis=0), np.max(sus, axis=0), win
