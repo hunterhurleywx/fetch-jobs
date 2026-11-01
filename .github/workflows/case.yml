@@ -69,6 +69,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt scipy pandas shapely boto3
+      - name: Free runner disk (preinstalled toolchains we never use; 2024-12-28 hit "Disk quota exceeded" pulling R2, 1 Nov 2026)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
       - name: Runner size
         run: echo "cores=$(nproc)"; free -g; df -h /tmp | tail -1
       - name: SPC outlooks, discussions and reports
