@@ -154,6 +154,7 @@ jobs:
             python -u consistency_blend.py "${{ inputs.date }}" --lead $L --hazards --mode track --tag _track --no-draw > /dev/null || echo "lead $L failed"
           done
           python -u experimental/draw_track_cases.py --cases "${{ inputs.date }}" --procs 1
+          python -u experimental/global_share_test.py "${{ inputs.date }}" || echo "global-share test failed"
           ls track_out/maps | head -20
       - uses: actions/upload-artifact@v4
         if: inputs.track == '1'
