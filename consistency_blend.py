@@ -49,6 +49,7 @@ def wcorr(a, b, m, w):
 CAM_FAMILY = {"nam", "hrrr", "rap", "refs"}
 FAMILY_SHARE = {1: 0.80, 2: 0.65}  # CAM family's share by lead (Hunter: CAMs get hefty weight from the start)
 TRACK_SHOWN_ONLY = {"rrfs"}  # Hunter: "RRFS is just goofy"
+GLOBALS = {"gfs", "gefs", "hres", "eps"}  # Hunter (30 Oct, again 1 Nov): Days 2-1 blend no global models; shown only
 
 
 def run_consistency(v, act, W):
@@ -84,7 +85,11 @@ def track_weights(P, rows, act, W, L, one_family=False):
     stats = {m: run_consistency(v, act, W) for m, v in P.items()}
     share = FAMILY_SHARE.get(L, 0.0)
     fam = (lambda m: "cam") if one_family else (lambda m: "cam" if m in CAM_FAMILY else "other")
-    used = [m for m in P if m not in TRACK_SHOWN_ONLY]
+    shown_only = TRACK_SHOWN_ONLY | (GLOBALS if L <= 2 else set())
+    if L <= 2:  # regional models only (NAM 3 km, HRRR, REFS, RAP, NAM 12 km): one group, consistency alone
+        one_family = True
+        fam = lambda m: "cam"
+    used = [m for m in P if m not in shown_only]
     present = {fam(m) for m in used}
     shares = {"cam": share if "other" in present else 1.0, "other": (1 - share) if "cam" in present else 1.0}
     if L >= 3:
@@ -106,7 +111,7 @@ def track_weights(P, rows, act, W, L, one_family=False):
         st = stats[m]
         w = raw.get(m, 0.0)
         txt = f"{st[1]:.2f}      {st[2]:5.0f}    {st[3]:.2f}        {st[0]:.2f}" if st else "  -          -        -        (1 run)"
-        print(f"{m:5s} {fam(m):6s} {len(v):3d}   {txt}       {w:.2f}{'  (shown only)' if m in TRACK_SHOWN_ONLY else ''}")
+        print(f"{m:5s} {fam(m):6s} {len(v):3d}   {txt}       {w:.2f}{'  (shown only)' if m in shown_only else ''}")
         n = len(v)
         rows[m]["wc"] = np.full(n, 1.0 / n)
         rows[m]["Wm"] = w

@@ -56,6 +56,74 @@ def hits(rep, field, thr, types=None):
     return round(float(np.mean(field[i, j] >= thr)), 2)
 
 
+NAMES = {"eps": "ECMWF EPS", "gefs": "GEFS", "hres": "ECMWF HRES", "gfs": "GFS", "nam": "NAM 3 km", "hrrr": "HRRR",
+         "refs": "REFS", "nam12": "NAM 12 km", "rap": "RAP", "rrfs": "RRFS"}
+PANELS = ("Overall severe", "Tornado", "Wind", "Hail")
+
+
+def draw_grid(rows, title, out, spc, extent, rep, dpi=72):
+    """One tall image: row 0 = blend, then one row per model; columns overall / tornado / wind / hail, each with SPC's
+    lines for that lead and the day's reports. Saved as a reduced-palette PNG (fits ~400 maps in one artifact)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm
+    from matplotlib.lines import Line2D
+    from PIL import Image
+    import calibrate
+    lv, cm = calibrate.SPC_LEVELS, calibrate.SPC_CMAP
+    per_panel = isinstance(spc, dict)
+    n = len(rows)
+    H = 3.25 * n + 1.8
+    fig, axes = plt.subplots(n, 4, figsize=(16, H), subplot_kw={"projection": plots.PROJ}, squeeze=False)
+    fig.subplots_adjust(left=0.07, right=0.99, top=1 - 1.05 / H, bottom=0.9 / H, wspace=0.04, hspace=0.16)
+    cf = None
+    for r, (label, maps) in enumerate(rows):
+        for c, (nm, p) in enumerate(maps):
+            ax = axes[r, c]
+            plots.base_ax(ax, "conus")
+            ax.set_extent(list(extent), plots.PC)
+            cf = ax.contourf(plots.LON2, plots.LAT2, p, levels=lv, cmap=cm, norm=BoundaryNorm(lv, cm.N), transform=plots.PC)
+            polys = spc.get(nm, []) if per_panel else [(g, lab) for g, lab in (spc or []) if lab.get("LABEL") in ("0.15", "SLGT")]
+            for geom, lab in polys:
+                parts = [g for g in getattr(geom, "geoms", [geom]) if g.geom_type in ("Polygon", "MultiPolygon")]
+                if str(lab.get("LABEL")).startswith("CIG") or lab.get("LABEL") == "SIGN":
+                    ax.add_geometries(parts, crs=plots.PC, facecolor="none", edgecolor="#444444", hatch="///", linewidth=0.5, zorder=7)
+                else:
+                    ax.add_geometries(parts, crs=plots.PC, facecolor="none", edgecolor="black", linewidth=1.3, linestyle="--", zorder=8)
+            if rep is not None and len(rep):
+                sel = {"Tornado": ("tornado",), "Wind": ("wind",), "Hail": ("hail",)}.get(nm, ("tornado", "wind", "hail"))
+                for typ, col, mk, sz in (("wind", "#1f5fd6", "o", 5), ("hail", "#1a9e3a", "o", 5), ("tornado", "#d00000", "v", 12)):
+                    if typ in sel:
+                        d = rep[rep["type"] == typ]
+                        ax.scatter(d["lon"], d["lat"], s=sz, marker=mk, c=col, edgecolors="black", linewidths=0.2, transform=plots.PC, zorder=11)
+            ins = (plots.LON2 >= extent[0]) & (plots.LON2 <= extent[1]) & (plots.LAT2 >= extent[2]) & (plots.LAT2 <= extent[3])
+            v = float(np.where(ins, p, 0).max())
+            ax.set_title(f"{nm.replace(' severe', '')}: {v:.0f}%" if v >= 1 else f"{nm.replace(' severe', '')}: <1%",
+                         fontsize=12, fontweight="bold" if r == 0 else "normal")
+        axes[r, 0].text(-0.04, 0.5, label, rotation=90, transform=axes[r, 0].transAxes, ha="right", va="center",
+                        fontsize=12, fontweight="bold" if r == 0 else "normal")
+    fig.suptitle(title, fontsize=15, fontweight="bold", y=1 - 0.3 / H)
+    cax = fig.add_axes([0.30, 0.25 / H, 0.40, 0.18 / H])
+    fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=lv[:-1]).set_label("%")
+    hd = [Line2D([], [], color="black", lw=1.4, ls="--"), Line2D([], [], color="#d00000", marker="v", lw=0, mec="black", ms=6),
+          Line2D([], [], color="#1f5fd6", marker="o", lw=0, mec="black", ms=4), Line2D([], [], color="#1a9e3a", marker="o", lw=0, mec="black", ms=4)]
+    fig.legend(hd, ["SPC outlook lines for this lead", "Tornado report", "Wind report", "Hail report"], loc="lower left",
+               bbox_to_anchor=(0.01, 0.05 / H), ncol=2, fontsize=10, frameon=False)
+    fig.savefig(out, dpi=dpi)
+    plt.close(fig)
+    Image.open(out).convert("RGB").quantize(colors=96).save(out, optimize=True)
+
+
+def model_maps(z, res, L, m, us, any14, hc):
+    """One model's pooled calibrated maps (as redraw_latest's per-model panels)."""
+    lay = [z[f"{L}__{m}__{k}"] for k in ("p_model", "p_lift", "sustain")]
+    p_ci = 0.6 * lay[0] + 0.4 * lay[1]
+    psev = np.where(us, ch.calibrated(z[f"{L}__{m}__env*ci"], any14), 0)
+    return [("Overall severe", psev)] + [(nm, np.where(us, np.minimum(ch.calibrated(res[f"{k}|{L}|{m}|day"] * p_ci, hc[k]), psev), 0))
+                                         for k, nm in HZ]
+
+
 def do_case(date):
     out = os.path.join(CASES_DIR, date, "output")
     conv = datetime.strptime(date, "%Y-%m-%d")
@@ -64,6 +132,7 @@ def do_case(date):
     us = plot_hhwx.us_mask()
     rep = plots.load_reports(date, conv)
     res = np.load(os.path.join(out, "results.npz"))
+    z = np.load(os.path.join(out, "ci_layers.npz"))
     summary = {"date": date, "n_reports": int(len(rep)) if rep is not None else 0,
                "n_tor": int((rep["type"] == "tornado").sum()) if rep is not None else 0, "leads": {}}
     for L in range(8, 0, -1):
@@ -79,8 +148,14 @@ def do_case(date):
         db03 = (conv - timedelta(days=1)).strftime("%Y%m%d") + "03"
         runs = rl.runs_text(res, L, used, db03)
         png = os.path.join(OUT, "maps", f"{date}_d{L}.png")
-        rl.draw_panel(maps, f"HHwx Calibrated Guidance Day-{L}: {conv:%a %d %b %Y}", png, spc, L,
-                      extent=extent_for(rep, sev), runs=runs, reports=rep, dpi=90)
+        mods = sorted((m for m in MODELS if f"{L}__{m}__p_model" in z.files), key=lambda m: (-w.get(m, 0), MODELS.index(m)))
+        nrun = {nm: rs.count(",") + rs.count(chr(10)) + 1 for nm, rs in rl.runs_text(res, L, mods, db03)}
+        rows = [("Blend (track-record)", maps)]
+        for m in mods:
+            tag = f"weight {w[m]:.2f}" if w.get(m, 0) > 0 else "shown only"
+            rows.append((f"{NAMES[m]}\n{tag}", model_maps(z, res, L, m, us, any14, hc)))
+        draw_grid(rows, f"HHwx Day-{L} guidance for {conv:%a %d %b %Y}: blend and each model", png, spc,
+                  extent_for(rep, sev), rep)
         tor = maps[1][1]
         summary["leads"][L] = {
             "weights": w, "max": {nm: round(float(f.max()), 1) for nm, f in maps},
