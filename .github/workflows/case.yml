@@ -183,7 +183,7 @@ jobs:
         env:
           POGS_MODE_OUT: ${{ github.workspace }}/mode_out
         run: |
-          pip install -q matplotlib cartopy
+          pip install -q matplotlib cartopy scikit-learn
           python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models hrrr_add nam_add rap_add nam12_add || true
           python -u experimental/mode_env.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/mode_env.log"
       - uses: actions/upload-artifact@v4
