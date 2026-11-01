@@ -9,7 +9,9 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Field cache lives on D: (outside OneDrive, 240 GB free). Raw GRIB is never kept:
 # each message is decoded, mapped to the 0.5 deg grid and saved as compressed npz.
 CACHE_DIR = os.environ.get("POGS_CACHE", r"D:\pogs_cache")
-CASES_DIR = os.environ.get("POGS_CASES", os.path.join(PROJECT_DIR, "cases"))
+# Case results moved off C: to D: on 1 Nov 2026 (Hunter: C: nearly full; also stops 30+ GB syncing to OneDrive).
+# Cloud runners set POGS_CASES themselves.
+CASES_DIR = os.environ.get("POGS_CASES", (r"D:\pogs_cases" if os.path.isdir(r"D:\pogs_cases") else os.path.join(PROJECT_DIR, "cases")))
 
 # Common analysis grid (0.5 deg) that every model is mapped onto
 GRID_LATS = np.arange(20.0, 55.0 + 0.01, 0.5)
