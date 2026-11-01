@@ -17,7 +17,9 @@ import io
 import json
 import os
 import sys
+import shutil
 import tarfile
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -87,38 +89,50 @@ def push_one(s3, bucket, model, init, tries=6):
         return 0
     key = key_of(model, init)
     names = {os.path.relpath(p, CACHE_DIR).replace("\\", "/"): p for p in files}
-    for attempt in range(tries):
-        try:
-            obj = s3.get_object(Bucket=bucket, Key=key)
-            old, cond = obj["Body"].read(), {"IfMatch": obj["ETag"]}
-        except s3.exceptions.NoSuchKey:
-            old, cond = None, {"IfNoneMatch": "*"}
-        buf = io.BytesIO()
-        n = 0
-        with tarfile.open(fileobj=buf, mode="w") as tf:
-            for arc, p in names.items():
-                tf.add(p, arcname=arc)
-                n += 1
-            if old:
-                with tarfile.open(fileobj=io.BytesIO(old)) as ot:
-                    for m in ot.getmembers():
-                        if m.isfile() and m.name not in names:
-                            tf.addfile(m, ot.extractfile(m))
-                            n += 1
-        try:
-            s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue(), **cond)
-            return n
-        except Exception as e:  # 412 PreconditionFailed: another job wrote the bundle since we read it
-            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if code in ("PreconditionFailed", "412", "ConditionalRequestConflict") and attempt < tries - 1:
-                time.sleep(1 + attempt)
-                continue
-            if code in ("PreconditionFailed", "412", "ConditionalRequestConflict"):
-                raise
-            # conditional writes unsupported (old boto3 / endpoint): the merge alone still keeps others' files
-            s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue())
-            return n
-    return 0
+    # Stream through temp files on disk, not memory: a 50-member upper-air bundle merged in memory (old bundle + new tar
+    # + a copy for the upload) ran GitHub runners out of RAM and got them killed (2024-04-26 / 2024-05-02, 1 Nov 2026).
+    tmpdir = tempfile.mkdtemp(prefix="r2push_")
+    old_p, new_p = os.path.join(tmpdir, "old.tar"), os.path.join(tmpdir, "new.tar")
+    try:
+        for attempt in range(tries):
+            try:
+                obj = s3.get_object(Bucket=bucket, Key=key)
+                with open(old_p, "wb") as f:
+                    shutil.copyfileobj(obj["Body"], f, 16 << 20)
+                have_old, cond = True, {"IfMatch": obj["ETag"]}
+            except s3.exceptions.NoSuchKey:
+                have_old, cond = False, {"IfNoneMatch": "*"}
+            n = 0
+            with tarfile.open(new_p, mode="w") as tf:
+                for arc, p in names.items():
+                    tf.add(p, arcname=arc)
+                    n += 1
+                if have_old:
+                    with tarfile.open(old_p) as ot:
+                        for m in ot:
+                            if m.isfile() and m.name not in names:
+                                tf.addfile(m, ot.extractfile(m))
+                                n += 1
+            if have_old:
+                os.remove(old_p)
+            try:
+                with open(new_p, "rb") as body:
+                    s3.put_object(Bucket=bucket, Key=key, Body=body, ContentLength=os.path.getsize(new_p), **cond)
+                return n
+            except Exception as e:  # 412 PreconditionFailed: another job wrote the bundle since we read it
+                code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+                if code in ("PreconditionFailed", "412", "ConditionalRequestConflict") and attempt < tries - 1:
+                    time.sleep(1 + attempt)
+                    continue
+                if code in ("PreconditionFailed", "412", "ConditionalRequestConflict"):
+                    raise
+                # conditional writes unsupported (old boto3 / endpoint): the merge alone still keeps others' files
+                with open(new_p, "rb") as body:
+                    s3.put_object(Bucket=bucket, Key=key, Body=body, ContentLength=os.path.getsize(new_p))
+                return n
+        return 0
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def main():
