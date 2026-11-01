@@ -1,0 +1,32 @@
+name: cape3-composite
+run-name: cape3 ${{ inputs.date }} | ${{ inputs.runs }}
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Convective day YYYY-MM-DD"
+        required: true
+      runs:
+        description: "model:YYYYMMDDHH list, e.g. hrrr:2026110118 rap:2026110121 rrfs:2026110118"
+        required: true
+      hours:
+        description: "Valid hours UTC"
+        default: "20 21 22 23 0"
+jobs:
+  cape3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt scipy matplotlib cartopy scikit-learn
+      - name: 0-3 km CAPE composite (experimental/cape3_composite.py)
+        env:
+          POGS_CAPE3_OUT: ${{ github.workspace }}/cape3_out
+        run: python -u experimental/cape3_composite.py "${{ inputs.date }}" --runs ${{ inputs.runs }} --hours ${{ inputs.hours }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cape3-${{ inputs.date }}
+          path: cape3_out

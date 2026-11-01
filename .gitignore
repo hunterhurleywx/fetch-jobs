@@ -40,6 +40,7 @@
 !/experimental/block_maps.py
 !/experimental/weight_features.py
 !/experimental/mode_env.py
+!/experimental/cape3_composite.py
 !/calib/
 
 __pycache__/
