@@ -8,7 +8,10 @@ Follows the pre-registered designs in research/20_boundary_orientation/01 sectio
 fixed beforehand, not tuned):
   BO0 (minimum viable): moisture boundary per 0.5 deg row 28-42N, 105-92W: smoothed 2 m q (sigma 0.75 cell), the
       longitude of max |grad q| where >= 2 g/kg per 100 km and q rises eastward; rows linked if |dlon| <= 1 deg,
-      segments >= 6 rows. Normal n points to the moist side (least-squares axis over +-2 rows). Boundary speed c_n
+      segments >= 6 rows. Cold front (added 1 Nov after Hunter's check, expected evening squall): 10 m wind shift
+      >= 40 deg with convergence, northerly/westerly behind; per row it replaces the dryline once it has reached it
+      (within 0.5 deg) or passed it; c_n only from same-type positions. Cells > 500 km from any boundary: unknown.
+      Normal n points to the moist side (least-squares axis over +-2 rows). Boundary speed c_n
       from the line position at t-3 h and t+3 h (invalid if |c_n| > 20 m/s or missing). Band weight G_w: 1 on
       0-100 km warm side, tapering to 0 at 150 km, and to 0 at 50 km on the dry side. Thermal fronts are not detected
       yet (known gap: after a front overtakes a dryline the moisture line can lag).
@@ -115,6 +118,53 @@ def find_line(q):
     return keep, G
 
 
+def find_front(fl):
+    """Cold front (BO0 wind-shift arm, minimum viable; not every model has 850 hPa temperature): per 0.5 deg row
+    28-42N, 105-90W, the longitude of strongest 10 m convergence where the 10 m wind turns by >= 40 deg across +-1 cell,
+    with a northerly / westerly component on the west (cold) side and a southerly one on the east side. Linked like
+    the moisture line."""
+    u, v = np.nan_to_num(fl["u10"]), np.nan_to_num(fl["v10"])
+    dx = DY * 1000 * np.cos(np.deg2rad(LAT))
+    div = np.gradient(u, axis=1) / dx + np.gradient(v, axis=0) / (DY * 1000)
+    conv = -ndimage.gaussian_filter(div, 0.75)
+    ang = np.degrees(np.arctan2(v, u))
+    rows = [i for i in range(LAT.shape[0]) if 28 <= LAT[i, 0] <= 42]
+    cols = np.where((LON[0] >= -105) & (LON[0] <= -90))[0]
+    pts = {}
+    for i in rows:
+        best, bj = 0.0, None
+        for j in cols[1:-1]:
+            w_, e_ = j - 1, j + 1
+            turn = abs((ang[i, e_] - ang[i, w_] + 180) % 360 - 180)
+            cold_side = v[i, w_] < 0 or (u[i, w_] > 0 and v[i, w_] < 2)
+            if turn >= 40 and cold_side and v[i, e_] > 0 and conv[i, j] > best:
+                best, bj = conv[i, j], int(j)
+        if bj is not None and best >= 1e-5:  # 1e-5 /s convergence
+            pts[i] = bj
+    keep, seg = {}, []
+    for i in sorted(pts):
+        if seg and (i != seg[-1] + 1 or abs(pts[i] - pts[seg[-1]]) > 2):
+            if len(seg) >= 6:
+                keep.update({r: pts[r] for r in seg})
+            seg = []
+        seg.append(i)
+    if len(seg) >= 6:
+        keep.update({r: pts[r] for r in seg})
+    return keep
+
+
+def active_line(dl, cf):
+    """Per row: the cold front where it has reached the dryline (within 0.5 deg west) or passed it, else the dryline.
+    Returns ({row: col}, {row: 'CF' or 'DL'})."""
+    out, typ = {}, {}
+    for i in set(dl) | set(cf):
+        if i in cf and (i not in dl or cf[i] >= dl[i] - 1):
+            out[i], typ[i] = cf[i], "CF"
+        elif i in dl:
+            out[i], typ[i] = dl[i], "DL"
+    return out, typ
+
+
 def normals(line):
     """Unit normal (east, north) per line row, pointing east-ish (moist side), from a +-2 row least-squares axis."""
     out = {}
@@ -152,7 +202,7 @@ def mode_at(fl, line, nrm, cn):
     Gw = np.where((d >= 0) & (d <= 100), 1.0, 0.0)
     Gw = np.where((d > 100) & (d <= 150), 1 - (d - 100) / 50, Gw)
     Gw = np.where((d >= -50) & (d < 0), 1 + d / 50, Gw)
-    far = np.hypot(dxkm, dykm) > 300
+    far = np.hypot(dxkm, dykm) > 500  # > 500 km from any boundary: mode unknown, excluded (was 0.5 = "semi" beyond 300 km)
     has_cl = "u700" in fl and "u300" in fl
     if has_cl:
         ucl, vcl = (fl["u700"] + fl["u500"] + fl["u300"]) / 3, (fl["v700"] + fl["v500"] + fl["v300"]) / 3
@@ -166,10 +216,11 @@ def mode_at(fl, line, nrm, cn):
             np.abs((fl["u300"] - fl["u700"]) * nE + (fl["v300"] - fl["v700"]) * nN), 5, 11)
     else:
         D2 = ramp(np.abs(s5u * nE + s5v * nN), 9, 16)
-    D = np.where(far, 0.5, 0.6 * D1 + 0.4 * D2)
+    D = np.where(far, np.nan, 0.6 * D1 + 0.4 * D2)
     O = ramp(np.hypot(s5u, s5v), 10, 18)
     disc, lin = O * np.maximum(0, 2 * D - 1), O * np.maximum(0, 1 - 2 * D)
     shares = np.stack([disc, O - disc - lin, lin, 1 - O])
+    shares = np.where(np.isfinite(D)[None], shares, np.nan)
     s3 = fl.get("u700", fl["u850"]) - fl["u10"], fl.get("v700", fl["v850"]) - fl["v10"]
     qlcs_n = np.abs(s3[0] * nE + s3[1] * nN)
     return shares, dict(D=D, Gw=Gw, qlcs_n=qlcs_n, has_cl=has_cl)
@@ -199,6 +250,7 @@ def main():
                 cyc = [c for c in cyc if c >= f"{conv - timedelta(days=1) + timedelta(hours=3):%Y%m%d%H}"]
             wblk = {b: z[f"{L}__{m}__{b}__p_model"] for b in ("b21", "b00", "b03", "b06") if f"{L}__{m}__{b}__p_model" in z.files}
             acc, acc_w, accD, accQ, n_used, n_cl = 0.0, 0.0, 0.0, 0.0, 0, 0
+            per_h, ncf, nrw = {}, {}, {}
             for c in cyc:
                 init = datetime.strptime(c, "%Y%m%d%H")
                 for mem in members(m):
@@ -209,17 +261,19 @@ def main():
                         if fh_available(m, init, fh):
                             fl = load_fields(m, init, fh, mem)
                             if fl is not None:
-                                seq[h] = (fl, *find_line(fl["q2"]))
+                                dl, _ = find_line(fl["q2"])
+                                seq[h] = (fl, *active_line(dl, find_front(fl)))
                     for h in HOURS:
                         if h not in seq:
                             continue
-                        fl, line, _ = seq[h]
+                        fl, line, ltyp = seq[h]
                         nrm = normals(line)
                         cn = {}
                         if (h - 3) in seq and (h + 3) in seq:
                             lp, ln_ = seq[h - 3][1], seq[h + 3][1]
+                            tp, tn = seq[h - 3][2], seq[h + 3][2]
                             for i, n in nrm.items():
-                                if i in lp and i in ln_:
+                                if i in lp and i in ln_ and tp.get(i) == ltyp.get(i) == tn.get(i):
                                     dx = (LON[0, ln_[i]] - LON[0, lp[i]]) * DY / 0.5 * np.cos(np.deg2rad(LAT[i, 0]))
                                     v = dx * 1000 * n[0] / (6 * 3600)
                                     if abs(v) <= 20:
@@ -233,10 +287,17 @@ def main():
                         shares, dg = r
                         bl = [wblk[b] for b in BLOCK_OF[h] if b in wblk]
                         w = np.mean(bl, axis=0) if bl else np.ones(LAT.shape)
-                        acc = acc + w * shares
+                        known = np.isfinite(dg["D"])
+                        w = np.where(known, w, 0.0)
+                        acc = acc + w * np.nan_to_num(shares)
                         acc_w = acc_w + w
-                        accD = accD + w * dg["D"]
+                        accD = accD + w * np.nan_to_num(dg["D"])
                         accQ = accQ + w * dg["qlcs_n"]
+                        ph = per_h.setdefault(h, [0.0, 0.0])
+                        ph[0] = ph[0] + np.nan_to_num(shares)
+                        ph[1] = ph[1] + known
+                        ncf[h] = ncf.get(h, 0) + sum(1 for t_ in ltyp.values() if t_ == "CF")
+                        nrw[h] = nrw.get(h, 0) + len(ltyp)
                         n_used += 1
                         n_cl += int(dg["has_cl"])
                         if c == cyc[-1] and mem == members(m)[0] and h == 24:
@@ -249,6 +310,10 @@ def main():
             save[f"{L}|{m}|D"] = np.where(us, accD / np.maximum(acc_w, 1e-6), np.nan).astype(np.float16)
             save[f"{L}|{m}|qlcs_n"] = np.where(us, accQ / np.maximum(acc_w, 1e-6), np.nan).astype(np.float16)
             save[f"{L}|{m}|n"] = np.array([n_used, n_cl], np.int32)
+            for h, (sa, sk) in per_h.items():  # the environment's mode at that hour (not weighted by storm chances)
+                save[f"{L}|{m}|shares_h{h % 24:02d}"] = np.where(us & (sk > 0), sa / np.maximum(sk, 1e-6), np.nan).astype(np.float16)
+            print("   cold-front share of boundary rows per hour: "
+                  + ", ".join(f"{h % 24:02d}Z {ncf[h] / max(nrw[h], 1):.2f}" for h in sorted(ncf)), flush=True)
             i, j = int(round((35.5 - 20) / .5)), int(round((-97.5 + 130) / .5))
             print(f"lead {L} {m}: {n_used} member-times ({n_cl} with 700/300 hPa winds); OKC shares "
                   f"disc {sh[0, i, j]:.2f} semi {sh[1, i, j]:.2f} lin {sh[2, i, j]:.2f} disorg {sh[3, i, j]:.2f}", flush=True)
