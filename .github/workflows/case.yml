@@ -31,6 +31,9 @@ on:
       pool_end:
         description: "Real-time: end every lead's global pool at this cycle (YYYYMMDDHH), e.g. today's 12Z"
         default: ""
+      track:
+        description: "1 = re-blend every lead with the track-record weights and draw past-case maps (artifact track-<date>)"
+        default: "0"
 
 jobs:
   case:
@@ -137,6 +140,25 @@ jobs:
           python -u ci.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --env v3 --out ci_layers_v3.npz 2>&1 | tee "cases/${{ inputs.date }}/logs/ci_v3.log"
       - name: Upper-air diagnostics (member means per model, cycle and valid time)
         run: python -u diag_upper.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/diag_upper.log" || true
+      - name: Track-record blend, every lead, past-case maps (Hunter 1 Nov 2026; same commands as the local run)
+        if: inputs.track == '1'
+        continue-on-error: true
+        env:
+          POGS_TRACK_OUT: ${{ github.workspace }}/track_out
+        run: |
+          pip install -q matplotlib cartopy scikit-learn
+          cp calib/*.json "$POGS_CASES/"
+          for L in ${{ inputs.leads }}; do
+            python -u consistency_blend.py "${{ inputs.date }}" --lead $L --hazards --mode track --tag _track --no-draw > /dev/null || echo "lead $L failed"
+          done
+          python -u experimental/draw_track_cases.py --cases "${{ inputs.date }}" --procs 1
+          ls track_out/maps | head -20
+      - uses: actions/upload-artifact@v4
+        if: inputs.track == '1'
+        with:
+          name: track-${{ inputs.date }}
+          path: track_out
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:

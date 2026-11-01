@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-from config import CASES_DIR
+from config import CASES_DIR, PROJECT_DIR
 
 REPO = "hunterhurleywx/fetch-jobs"
 WORKFLOW = "case.yml"  # --backend aws: aws_case.yml (same inputs and artifact, run on an AWS spot machine)
@@ -33,19 +33,41 @@ def runs(limit=100):
                          "databaseId,displayTitle,status,conclusion", "-L", str(limit)))
 
 
-def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt", skip=""):
+def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt", skip="", track=False):
     """Dispatch one case and return its run id, matched by run-name."""
-    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | aws" if aws else "")
+    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | track" if track else "") + (" | aws" if aws else "")
     before = {r["databaseId"] for r in runs()}
     gh("workflow", "run", WORKFLOW, "-R", REPO, "-f", f"date={date}", "-f", f"leads={' '.join(leads)}",
        "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}", "-f", f"addons={addons}",
        *(["-f", f"attempts={attempts}"] if aws and attempts else []), *(["-f", f"pool_end={pool_end}"] if pool_end else []),
-       *(["-f", f"srh={srh}"] if srh != "2pt" else []), *(["-f", f"skip={skip}"] if skip else []))
+       *(["-f", f"srh={srh}"] if srh != "2pt" else []), *(["-f", f"skip={skip}"] if skip else []), *(["-f", "track=1"] if track else []))
     while True:
         time.sleep(3)
         new = [r["databaseId"] for r in runs(30) if r["databaseId"] not in before and r["displayTitle"] == title]
         if new:
             return new[0]
+
+
+def collect_track(date, run_id, log=print):
+    """Only the track-record maps and summary (artifact track-<date>, a few MB) into pages/pasttrack."""
+    dest = os.path.join(PROJECT_DIR, "pages", "pasttrack")
+    with tempfile.TemporaryDirectory() as tmp:
+        r = subprocess.run(["gh", "run", "download", str(run_id), "-R", REPO, "-n", f"track-{date}", "-D", tmp],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            log(f"[{date}] no track artifact: {r.stderr.strip()[:200]}")
+            return False
+        os.makedirs(os.path.join(dest, "maps"), exist_ok=True)
+        n = 0
+        for f in os.listdir(os.path.join(tmp, "maps")):
+            shutil.copy2(os.path.join(tmp, "maps", f), os.path.join(dest, "maps", f))
+            n += 1
+        jp = os.path.join(dest, "cases.json")
+        allc = {c["date"]: c for c in (json.load(open(jp)) if os.path.exists(jp) else [])}
+        allc.update({c["date"]: c for c in json.load(open(os.path.join(tmp, "cases.json")))})
+        json.dump(sorted(allc.values(), key=lambda c: c["date"]), open(jp, "w"), indent=1)
+        log(f"[{date}] track: {n} maps -> {dest}")
+    return True
 
 
 def collect(date, run_id, log=print, suffix=""):
@@ -92,6 +114,8 @@ def main():
     ap.add_argument("--srh", default="2pt", choices=["2pt", "4a", "4b"], help="tornado helicity proxy (LM2 test); GitHub backend only")
     ap.add_argument("--pool-end", default="", help="real-time: end the global pool at this cycle (YYYYMMDDHH) instead of SPC's issue time")
     ap.add_argument("--skip", default="", help='real-time: runs that count as missing (POGS_SKIP), e.g. "hres:2026103118,eps:2026103118"')
+    ap.add_argument("--track", action="store_true", help="re-blend all leads with track-record weights in the cloud; "
+                    "download ONLY the maps + summary (track-<date>) into pages/pasttrack, not the case files")
     ap.add_argument("--realtime", action="store_true", help="aws: on-demand machines only (never reclaimed); backfills default to spot first, then on-demand")
     ap.add_argument("--suffix", default="", help='store the .npz results as <name><suffix>.npz, e.g. "_noeccin"')
     a = ap.parse_args()
@@ -105,7 +129,7 @@ def main():
         while queue and len(active) < a.max_parallel:
             d = queue.pop(0)
             active[d] = trigger(d, a.leads, a.cam_runs, "0" if a.no_ec_cin else "1", "0" if a.no_addons else "1", a.backend == "aws",
-                                "ondemand ondemand" if a.realtime else "", a.pool_end, a.srh, a.skip)
+                                "ondemand ondemand" if a.realtime else "", a.pool_end, a.srh, a.skip, a.track)
             log(f"[{d}] run {active[d]} started")
         time.sleep(30)
         status = {r["databaseId"]: r for r in runs()}
@@ -113,7 +137,7 @@ def main():
             r = status.get(rid)
             if r and r["status"] == "completed":
                 log(f"[{d}] {r['conclusion']} after {(time.time() - t0) / 60:.0f} min")
-                collect(d, rid, log, a.suffix)
+                collect_track(d, rid, log) if a.track else collect(d, rid, log, a.suffix)
                 del active[d]
     log(f"all done in {(time.time() - t0) / 60:.1f} min")
 

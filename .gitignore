@@ -26,6 +26,15 @@
 !/nam_signal.py
 !/sfc_fields.py
 !/aws/
+!/consistency_blend.py
+!/redraw_latest.py
+!/bust_summary.py
+!/calibrate_hazards.py
+!/plot_hhwx.py
+!/experimental/
+/experimental/*
+!/experimental/draw_track_cases.py
+!/calib/
 
 __pycache__/
 *.pyc
