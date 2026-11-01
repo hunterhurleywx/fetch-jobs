@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      POGS_CACHE: /tmp/pogs_cache
+      POGS_CACHE: ${{ github.workspace }}/../pogs_cache  # main disk, not /tmp: GitHub now mounts /tmp as a 7.7 GB tmpfs (Disk quota exceeded, 1 Nov 2026)
       POGS_CASES: ${{ github.workspace }}/cases
       MAIN_MODELS: gfs gefs hres eps hrrr nam rap nam12 rrfs refs eps_z
       X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x rrfs_ci refs_ci
