@@ -63,6 +63,10 @@ def collect_track(date, run_id, log=print):
                 gd = os.path.join(PROJECT_DIR, "research", "26_global_share")
                 os.makedirs(gd, exist_ok=True)
                 shutil.copy2(os.path.join(tmp, f), os.path.join(gd, f))
+            if f.startswith("wfeat_") and f.endswith(".npz"):  # weighting test features (experimental/weight_features.py)
+                wd = os.path.join(PROJECT_DIR, "research", "30_weighting", "features")
+                os.makedirs(wd, exist_ok=True)
+                shutil.copy2(os.path.join(tmp, f), os.path.join(wd, f))
         n = 0
         for f in os.listdir(os.path.join(tmp, "maps")):
             shutil.copy2(os.path.join(tmp, "maps", f), os.path.join(dest, "maps", f))

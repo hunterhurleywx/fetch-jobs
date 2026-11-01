@@ -187,6 +187,7 @@ jobs:
           done
           python -u experimental/draw_track_cases.py --cases "${{ inputs.date }}" --procs 1
           python -u experimental/global_share_test.py "${{ inputs.date }}" || echo "global-share test failed"
+          POGS_WT_OUT="$POGS_TRACK_OUT" python -u experimental/weight_features.py "${{ inputs.date }}" || echo "weight features failed"
           ls track_out/maps | head -20
       - uses: actions/upload-artifact@v4
         if: inputs.track == '1'

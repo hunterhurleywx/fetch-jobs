@@ -38,6 +38,7 @@
 !/experimental/ai_models.py
 !/experimental/srh_native_test.py
 !/experimental/block_maps.py
+!/experimental/weight_features.py
 !/calib/
 
 __pycache__/
