@@ -116,7 +116,7 @@ def main():
     ap.add_argument("--no-ec-cin", action="store_true", help="score ECMWF without derive_parcel.py CIN (backtests)")
     ap.add_argument("--no-addons", action="store_true", help="skip the checklist add-on downloads (scoring-only runs, e.g. backtests)")
     ap.add_argument("--backend", choices=["github", "aws"], default="github", help="aws: run each case on a 64-core AWS spot machine")
-    ap.add_argument("--srh", default="2pt", choices=["2pt", "4a", "4b"], help="tornado helicity proxy (LM2 test); GitHub backend only")
+    ap.add_argument("--srh", default="2pt", choices=["2pt", "4a", "4b", "native"], help="tornado helicity: proxy (2pt live), LM2 tests 4a/4b, or native CAM HLCY (placement test); GitHub backend only")
     ap.add_argument("--pool-end", default="", help="real-time: end the global pool at this cycle (YYYYMMDDHH) instead of SPC's issue time")
     ap.add_argument("--skip", default="", help='real-time: runs that count as missing (POGS_SKIP), e.g. "hres:2026103118,eps:2026103118"')
     ap.add_argument("--track", action="store_true", help="re-blend all leads with track-record weights in the cloud; "

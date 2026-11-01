@@ -36,6 +36,8 @@
 !/experimental/draw_track_cases.py
 !/experimental/global_share_test.py
 !/experimental/ai_models.py
+!/experimental/srh_native_test.py
+!/experimental/block_maps.py
 !/calib/
 
 __pycache__/

@@ -23,7 +23,7 @@ on:
         description: "1 = also download the checklist add-on sets (scoring does not use them yet); 0 = scoring-only run"
         default: "1"
       srh:
-        description: "Tornado helicity proxy: 2pt (live) | 4a | 4b (scorecard test LM2)"
+        description: "Tornado helicity: 2pt (live proxy) | 4a | 4b (scorecard test LM2) | native (CAM HLCY, placement test)"
         default: "2pt"
       skip:
         description: "Runs to leave out as if missing, e.g. hres:2026103112,eps:2026103112 (freeze a real-time case)"
@@ -50,6 +50,7 @@ jobs:
       # add-on sets adopted 31 Oct 2026 (config.ADD_FIELDS); EPS add-on is the heavy one, so it gets its own pass
       ADD_MODELS: gfs_add gefs_add hres_add hrrr_add nam_add rap_add nam12_add hrrr_sfc
       EPS_ADD: eps_add
+      SRH_MODELS: hrrr_srh nam_srh rap_srh nam12_srh rrfs_srh refs_srh  # native helicity, only with srh=native
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -93,6 +94,14 @@ jobs:
           exit $(( s1 || s2 ))
       - name: Push new decoded fields to R2
         run: python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $MAIN_MODELS $X_MODELS
+      - name: Native CAM helicity (srh=native only; placement test 1 Nov 2026)
+        if: inputs.srh == 'native'
+        run: |
+          python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $SRH_MODELS
+          python -u download_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $SRH_MODELS             --ncep-workers 48 --ec-workers 4 --decode-procs 4 > "cases/${{ inputs.date }}/logs/download_srh.log" 2>&1
+          s=$?; tail -n 3 "cases/${{ inputs.date }}/logs/download_srh.log"
+          python -u r2_cache.py push "${{ inputs.date }}" --leads ${{ inputs.leads }} --models $SRH_MODELS || true
+          exit $s
       - name: Add-on downloads (adopted parameter review; scoring does not need them yet)
         if: inputs.addons != '0'
         continue-on-error: true
@@ -132,6 +141,13 @@ jobs:
         if: inputs.cam_runs != ''
         continue-on-error: true
         run: python -u cam_snap.py "${{ inputs.date }}" 2>&1 | tee "cases/${{ inputs.date }}/logs/cam_snap.log"
+      - name: Score with the live helicity proxy too (srh=native only; kept as results_2pt.npz)
+        if: inputs.srh == 'native'
+        env:
+          POGS_SRH: 2pt
+        run: |
+          python -u run_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --no-plots > "cases/${{ inputs.date }}/logs/run_case_2pt.log" 2>&1
+          cp "cases/${{ inputs.date }}/output/results.npz" "cases/${{ inputs.date }}/output/results_2pt.npz"
       - name: Score
         run: python -u run_case.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --no-plots 2>&1 | tee "cases/${{ inputs.date }}/logs/run_case.log"
       - name: Verify (skipped for real-time cases without reports)
@@ -142,6 +158,22 @@ jobs:
           python -u ci.py "${{ inputs.date }}" --leads ${{ inputs.leads }} --env v3 --out ci_layers_v3.npz 2>&1 | tee "cases/${{ inputs.date }}/logs/ci_v3.log"
       - name: Upper-air diagnostics (member means per model, cycle and valid time)
         run: python -u diag_upper.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/diag_upper.log" || true
+      - name: Native-helicity test (srh=native; Days 2-1 track blend, 2pt vs native)
+        if: inputs.srh == 'native'
+        continue-on-error: true
+        env:
+          POGS_SRH_OUT: ${{ github.workspace }}/srh_out
+        run: |
+          pip install -q matplotlib cartopy scikit-learn
+          cp calib/*.json "$POGS_CASES/"
+          cp "cases/${{ inputs.date }}/output/results.npz" "cases/${{ inputs.date }}/output/results_native.npz"
+          python -u experimental/srh_native_test.py "${{ inputs.date }}"
+      - uses: actions/upload-artifact@v4
+        if: inputs.srh == 'native'
+        with:
+          name: srhtest-${{ inputs.date }}
+          path: srh_out
+          if-no-files-found: ignore
       - name: Track-record blend, every lead, past-case maps (Hunter 1 Nov 2026; same commands as the local run)
         if: inputs.track == '1'
         continue-on-error: true

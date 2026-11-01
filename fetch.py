@@ -16,7 +16,7 @@ from config import (CACHE_DIR, EC_FIELDS, EC_FIELDS_EPS, EC_SND_FIELDS, EPS_MEMB
                     GEFS_FIELDS_B, GEFS_MEMBERS, GFS_FIELDS, GFS_SND_FIELDS, GRID_LATS, GRID_LONS,
                     SND_LATS, SND_LONS, GFS_X_FIELDS, GEFS_X_FIELDS_A, GEFS_X_FIELDS_B, EC_X_FIELDS, EC_Z_FIELDS,
                     NCEP_UA_FIELDS, EC_UA_FIELDS, NAM12_X_FIELDS, GEFS_PL_FIELDS_A, GEFS_PL_FIELDS_B, EC_PL_FIELDS,
-                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS, RRFS_2D_KEYS, REFS_MEMBERS,
+                    OPTIONAL_X, CAM_FIELDS, CAM_CI_FIELDS, CAM_SRH_FIELDS, CAM_OPTIONAL, CAM_MAX_KEYS, RRFS_2D_KEYS, REFS_MEMBERS,
                     ADD_FIELDS, ADD_MAX_VARS, add_key)
 
 GRIDS = {"main": (GRID_LATS, GRID_LONS), "snd": (SND_LATS, SND_LONS)}
@@ -390,6 +390,8 @@ def get_refs_member(model, init, fh, mem):
     """One REFS member at one hour: refs (environment) or refs_ci (hourly REFC / UH)."""
     if model == "refs_ci":
         groups = [(REFS_URL("2dfld", init, fh, mem), CAM_CI_FIELDS)]
+    elif model == "refs_srh":
+        groups = [(REFS_URL("2dfld", init, fh, mem), CAM_SRH_FIELDS)]
     else:
         groups = [(REFS_URL("2dfld", init, fh, mem), REFS_2D), (REFS_URL("prslev", init, fh, mem), REFS_PRS)]
     fields = {}
@@ -406,7 +408,13 @@ def get_refs_member(model, init, fh, mem):
 
 
 def get_cam(model, init, fh):
-    """model: hrrr | nam | rap | nam12 | rrfs (environment fields), nam12_x, or <model>_ci (hourly REFC / UH)."""
+    """model: hrrr | nam | rap | nam12 | rrfs (environment fields), nam12_x, <model>_ci (hourly REFC / UH) or
+    <model>_srh (native 0-1 / 0-3 km helicity)."""
+    if model.endswith("_srh"):
+        base = model[:-4]
+        url = RRFS_2D_URL(init, fh) if base == "rrfs" else CAM_URL[base](init, fh)
+        wanted = cam_ranges(http_get(url + ".idx").decode(), CAM_SRH_FIELDS, fh, {"srh1"} if base == "nam12" else set())
+        return {"det": {key: _decode_cam(http_get(url, (s, e)), False, sub) for s, e, (key, sub) in wanted}}
     base, ci = model.replace("_ci", "").replace("_x", ""), model.endswith("_ci")
     spec = CAM_CI_FIELDS if ci else (NAM12_X_FIELDS if model == "nam12_x" else CAM_FIELDS)
     optional = CAM_OPTIONAL | ({"cape90", "cin90"} if base == "nam12" else set())  # NAM 12 km: 180-0 mb CAPE/CIN only
@@ -571,7 +579,7 @@ def is_cached(model, init, fh):
     members = {"gefs": GEFS_MEMBERS, "eps": EPS_MEMBERS, "gefs_x": GEFS_MEMBERS,
                "eps_x": EPS_MEMBERS, "eps_z": EPS_MEMBERS, "gefs_ua": GEFS_MEMBERS, "eps_ua": EPS_MEMBERS, "gefs_pl": GEFS_MEMBERS, "eps_pl": EPS_MEMBERS,
                "gefs_add": GEFS_MEMBERS, "eps_add": EPS_MEMBERS, "eps_pcl": EPS_MEMBERS,
-               "refs": REFS_MEMBERS, "refs_ci": REFS_MEMBERS}.get(model, ["det"])
+               "refs": REFS_MEMBERS, "refs_ci": REFS_MEMBERS, "refs_srh": REFS_MEMBERS}.get(model, ["det"])
     if os.path.exists(missing_marker(model, init, fh)):
         return True
     return all(os.path.exists(cache_path(model, init, fh, m)) for m in members)
@@ -636,11 +644,11 @@ def download_all(tasks, ncep_workers=24, ec_workers=8, log=print):
             # deterministic: get_add returns a flat field dict, so it is saved as member "det" (31 Oct fix: these were
             # passed to _save ungrouped and every one failed, silently, since the add-on pass is continue-on-error)
             futs[ncep_pool.submit(get_add, model, init, fh)] = (model, init, fh, "det")
-        elif model in ("refs", "refs_ci"):
+        elif model in ("refs", "refs_ci", "refs_srh"):
             for m in REFS_MEMBERS:
                 if not os.path.exists(cache_path(model, init, fh, m)):
                     futs[ncep_pool.submit(get_refs_member, model, init, fh, m)] = (model, init, fh, m)
-        elif model.replace("_ci", "") in CAM_URL or model == "nam12_x":
+        elif model.replace("_ci", "").replace("_srh", "") in CAM_URL or model == "nam12_x":
             futs[ncep_pool.submit(get_cam, model, init, fh)] = (model, init, fh, None)
         else:
             futs[ec_pool.submit(get_ecmwf, init, fh, model, ec_member_pool)] = (model, init, fh, None)

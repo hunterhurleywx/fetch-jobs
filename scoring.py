@@ -254,6 +254,10 @@ def tornado_env(ing, f, dz12=None, v=1):
             srh = np.where(ok925, three, srh)
             if SRH_MODE == "4b" and "u700" in f:
                 srh3 = srh + _srh([(u8, v8), (f["u700"], f["v700"])], cu, cv)
+        if SRH_MODE == "native" and "srh3" in f:  # placement test (1 Nov 2026): the CAMs' own HLCY replaces the proxy,
+            if "srh1" in f:  # 0-1 km where the model has it (NAM 12 km: 0-3 km only, proxy kept for 0-1 km);
+                srh = np.where(np.isfinite(f["srh1"]), f["srh1"], srh)  # proxy outside the model domain
+            srh3 = np.where(np.isfinite(f["srh3"]), f["srh3"], srh)  # 0-3 km enters through the LM2 4b form below
         if v == 2:  # second stage: outbreak SRH01 ~350 vs isolated ~160 (Anderson-Frey 2018); HSLC shear > 17 m/s is common (King 2017)
             k_sc = (0.5 * (0.75 * ramp(srh, 40.0, 220.0) + 0.25 * ramp(srh, 220.0, 400.0))
                     + 0.5 * (0.75 * ramp(ing["llshear"], 7.5, 17.5) + 0.25 * ramp(ing["llshear"], 17.5, 27.5)))

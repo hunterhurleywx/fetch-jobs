@@ -156,6 +156,10 @@ CAM_FIELDS = {
 # hourly storm signal, 18Z-06Z
 CAM_CI_FIELDS = {"refc": ("REFC", "entire atmosphere", "inst"), "uh25": ("MXUPHL", "5000-2000 m above ground", "max")}
 CAM_OPTIONAL = {"uh25"}  # RAP has no UH
+# Native storm-relative helicity (model Bunkers motion), cached as <model>_srh; scored only with POGS_SRH=native
+# (tornado placement test, 1 Nov 2026). .idx checked 1 Nov: HRRR wrfprs, NAM nest, RAP awp130, RRFS 2dfld and REFS
+# 2dfldnomads carry both layers; NAM 12 km awphys has 0-3 km only.
+CAM_SRH_FIELDS = {"srh1": ("HLCY", "1000-0 m above ground", "inst"), "srh3": ("HLCY", "3000-0 m above ground", "inst")}
 CAM_MAX_KEYS = {"refc", "uh25"}
 # NAM 12 km is a global-type model (parameterized convection; Hunter 30 Oct 2026): its storm signal is convective
 # precip (3-h ACPCP buckets) plus mid-level RH, cached as "nam12_x", not simulated reflectivity
@@ -196,7 +200,7 @@ def fh_available(model, init, fh):
     """Whether a model run has output at forecast hour fh."""
     if fh <= 0:
         return False
-    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "").replace("_add", "").replace("_sfc", "").replace("_pcl", "")
+    model = model.replace("_snd", "").replace("_x", "").replace("_z", "").replace("_ci", "").replace("_ua", "").replace("_pl", "").replace("_add", "").replace("_sfc", "").replace("_pcl", "").replace("_srh", "")
     if model == "hrrr":
         return fh <= 18 or (init.hour % 6 == 0 and fh <= 48)
     if model == "nam":

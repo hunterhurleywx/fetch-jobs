@@ -88,14 +88,16 @@ def run_consistency(v, act, W):
     return score, iou, mv, sw
 
 
-def track_weights(P, rows, act, W, L, one_family=False, global_share=0.0):
+def track_weights(P, rows, act, W, L, one_family=False, global_share=0.0, all_models=False):
     """Model weight = (own-run consistency)^2 within its family (CAMs vs the rest), family shares by lead; every run of
     a model counts equally (no recency). A model with one run has no track record yet: it gets its family's LOWEST score."""
     stats = {m: run_consistency(v, act, W) for m, v in P.items()}
     share = FAMILY_SHARE.get(L, 0.0)
     fam = (lambda m: "cam") if one_family else (lambda m: "cam" if m in CAM_FAMILY else "other")
     shown_only = TRACK_SHOWN_ONLY | (GLOBALS if L <= 2 and global_share <= 0 else set())
-    if L <= 2 and global_share <= 0:  # regional models only (NAM 3 km, HRRR, REFS, RAP, NAM 12 km): one group
+    if all_models:  # Hunter, 1 Nov 2026 (Monday view): every model incl. RRFS and the globals, one group, consistency only
+        shown_only, one_family, fam = set(), True, (lambda m: "cam")
+    elif L <= 2 and global_share <= 0:  # regional models only (NAM 3 km, HRRR, REFS, RAP, NAM 12 km): one group
         one_family = True
         fam = lambda m: "cam"
     elif L <= 2:  # test: globals get global_share, the regional models (incl. NAM 12 km) the rest
@@ -157,6 +159,7 @@ def main():
     ap.add_argument("--tag", default="", help="suffix for the saved blend file (side versions, e.g. _cam)")
     ap.add_argument("--global-share", type=float, default=0.0,
                     help="Days 2-1 test only: give the global models this share of the blend (0 = live rule: none)")
+    ap.add_argument("--all-models", action="store_true", help="track mode: every model (RRFS and globals too) in one group")
     ap.add_argument("--one-family", action="store_true", help="track mode: no CAM/other split; consistency alone")
     ap.add_argument("--mode", choices=["base", "track"], default="base",
                     help="track (Hunter, 1 Nov 2026; Monday test): no default model weights; each model weighted by how "
@@ -204,7 +207,7 @@ def main():
     blend /= wsum
     flat /= flatw
     if a.mode == "track":
-        blend, wsum = track_weights(P, rows, act, W, L, a.one_family, a.global_share)
+        blend, wsum = track_weights(P, rows, act, W, L, a.one_family, a.global_share, a.all_models)
     lab = lambda c: f"{c[6:8]}/{c[8:10]}Z"
     print(f"Day {L} pool cycles: {', '.join(lab(c) for c in rows[next(iter(rows))]['cyc'])}  (active area {int(act.sum())} cells)")
     print(f"{'model':5s}  {'cycle weights (oldest -> newest)':42s} stability  k     support  a     base -> final weight")
