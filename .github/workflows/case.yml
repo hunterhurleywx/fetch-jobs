@@ -1,5 +1,5 @@
 name: run-case
-run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}${{ inputs.addons == '0' && ' | no add-ons' || '' }}${{ inputs.pool_end != '' && format(' | pool to {0}', inputs.pool_end) || '' }}${{ inputs.srh != '' && inputs.srh != '2pt' && format(' | srh {0}', inputs.srh) || '' }}${{ inputs.skip != '' && ' | frozen' || '' }}${{ inputs.track == '1' && ' | track' || '' }}
+run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}${{ inputs.addons == '0' && ' | no add-ons' || '' }}${{ inputs.pool_end != '' && format(' | pool to {0}', inputs.pool_end) || '' }}${{ inputs.srh != '' && inputs.srh != '2pt' && format(' | srh {0}', inputs.srh) || '' }}${{ inputs.skip != '' && ' | frozen' || '' }}${{ inputs.track == '1' && ' | track' || '' }}${{ inputs.mode == '1' && ' | mode' || '' }}
 # Whole pipeline for one convective day in the cloud: SPC files, model fields (decoded-field cache in
 # Cloudflare R2 first, then raw downloads for whatever is missing, main fields and CI extras in
 # parallel), scoring, verification and the CI layer. New decoded fields go back to R2 so reruns skip
@@ -31,6 +31,9 @@ on:
       pool_end:
         description: "Real-time: end every lead's global pool at this cycle (YYYYMMDDHH), e.g. today's 12Z"
         default: ""
+      mode:
+        description: "1 = environment storm mode (experimental/mode_env.py; artifact mode-<date>)"
+        default: "0"
       track:
         description: "1 = re-blend every lead with the track-record weights and draw past-case maps (artifact track-<date>)"
         default: "0"
@@ -173,6 +176,20 @@ jobs:
         with:
           name: srhtest-${{ inputs.date }}
           path: srh_out
+          if-no-files-found: ignore
+      - name: Environment storm mode (mode=1; boundary-relative winds and shear, research/20 BO0-BO2)
+        if: inputs.mode == '1'
+        continue-on-error: true
+        env:
+          POGS_MODE_OUT: ${{ github.workspace }}/mode_out
+        run: |
+          python -u r2_cache.py pull "${{ inputs.date }}" --leads ${{ inputs.leads }} --models hrrr_add nam_add rap_add nam12_add || true
+          python -u experimental/mode_env.py "${{ inputs.date }}" --leads ${{ inputs.leads }} 2>&1 | tee "cases/${{ inputs.date }}/logs/mode_env.log"
+      - uses: actions/upload-artifact@v4
+        if: inputs.mode == '1'
+        with:
+          name: mode-${{ inputs.date }}
+          path: mode_out
           if-no-files-found: ignore
       - name: Track-record blend, every lead, past-case maps (Hunter 1 Nov 2026; same commands as the local run)
         if: inputs.track == '1'

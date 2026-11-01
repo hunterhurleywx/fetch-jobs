@@ -39,6 +39,7 @@
 !/experimental/srh_native_test.py
 !/experimental/block_maps.py
 !/experimental/weight_features.py
+!/experimental/mode_env.py
 !/calib/
 
 __pycache__/

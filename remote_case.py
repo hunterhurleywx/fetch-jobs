@@ -33,14 +33,14 @@ def runs(limit=100):
                          "databaseId,displayTitle,status,conclusion", "-L", str(limit)))
 
 
-def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt", skip="", track=False):
+def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt", skip="", track=False, mode=False):
     """Dispatch one case and return its run id, matched by run-name."""
-    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | track" if track else "") + (" | aws" if aws else "")
+    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | track" if track else "") + (" | mode" if mode else "") + (" | aws" if aws else "")
     before = {r["databaseId"] for r in runs()}
     gh("workflow", "run", WORKFLOW, "-R", REPO, "-f", f"date={date}", "-f", f"leads={' '.join(leads)}",
        "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}", "-f", f"addons={addons}",
        *(["-f", f"attempts={attempts}"] if aws and attempts else []), *(["-f", f"pool_end={pool_end}"] if pool_end else []),
-       *(["-f", f"srh={srh}"] if srh != "2pt" else []), *(["-f", f"skip={skip}"] if skip else []), *(["-f", "track=1"] if track else []))
+       *(["-f", f"srh={srh}"] if srh != "2pt" else []), *(["-f", f"skip={skip}"] if skip else []), *(["-f", "track=1"] if track else []), *(["-f", "mode=1"] if mode else []))
     while True:
         time.sleep(3)
         new = [r["databaseId"] for r in runs(30) if r["databaseId"] not in before and r["displayTitle"] == title]
