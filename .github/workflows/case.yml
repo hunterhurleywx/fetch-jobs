@@ -1,5 +1,5 @@
 name: run-case
-run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}${{ inputs.addons == '0' && ' | no add-ons' || '' }}${{ inputs.pool_end != '' && format(' | pool to {0}', inputs.pool_end) || '' }}${{ inputs.srh != '' && inputs.srh != '2pt' && format(' | srh {0}', inputs.srh) || '' }}${{ inputs.skip != '' && ' | frozen' || '' }}
+run-name: case ${{ inputs.date }} | ${{ inputs.leads }}${{ inputs.cam_runs != '' && ' | latest CAMs' || '' }}${{ inputs.ec_cin == '0' && ' | no EC CIN' || '' }}${{ inputs.addons == '0' && ' | no add-ons' || '' }}${{ inputs.pool_end != '' && format(' | pool to {0}', inputs.pool_end) || '' }}${{ inputs.srh != '' && inputs.srh != '2pt' && format(' | srh {0}', inputs.srh) || '' }}${{ inputs.skip != '' && ' | frozen' || '' }}${{ inputs.track == '1' && ' | track' || '' }}
 # Whole pipeline for one convective day in the cloud: SPC files, model fields (decoded-field cache in
 # Cloudflare R2 first, then raw downloads for whatever is missing, main fields and CI extras in
 # parallel), scoring, verification and the CI layer. New decoded fields go back to R2 so reruns skip
