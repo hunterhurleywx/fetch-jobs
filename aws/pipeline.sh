@@ -80,5 +80,11 @@ step "score (run_case)" 1 bash -c "python -u run_case.py '$D' --leads $LEADS --n
 step "verify" 0 bash -c "python -u verify_case.py '$D' > '$L/verify.log' 2>&1"
 step "CI layer" 1 bash -c "python -u ci.py '$D' --leads $LEADS > '$L/ci.log' 2>&1 && python -u ci.py '$D' --leads $LEADS --env v3 --out ci_layers_v3.npz > '$L/ci_v3.log' 2>&1"
 step "upper-air diagnostics" 0 bash -c "python -u diag_upper.py '$D' --leads $LEADS > '$L/diag_upper.log' 2>&1"
+AI_RUNS=$(echo "${POGS_CAM_RUNS:-}" | tr ';' '\n' | grep -E '^(aifs|aifs_ens|aigfs):' | tr '\n' ' ')
+if [ -n "$AI_RUNS" ]; then  # AI models (experimental, display only): ECMWF AIFS / AIFS ENS, scored per run + meso-low track
+  pip install -q matplotlib cartopy scikit-learn shapely pandas >/dev/null 2>&1 || true
+  cp calib/*.json "$POGS_CASES/" 2>/dev/null || true
+  step "AI models (AIFS / AIFS ENS)" 0 bash -c "python -u experimental/ai_models.py '$D' --day $LEADS --spc-lead $LEADS --runs $AI_RUNS > '$L/ai_models.log' 2>&1"
+fi
 echo "pipeline finished; optional-step failures: $FAILED"
 exit 0

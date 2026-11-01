@@ -35,6 +35,7 @@
 /experimental/*
 !/experimental/draw_track_cases.py
 !/experimental/global_share_test.py
+!/experimental/ai_models.py
 !/calib/
 
 __pycache__/
