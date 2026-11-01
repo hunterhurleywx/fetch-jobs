@@ -41,6 +41,13 @@ HZ = (("tor", "Tornado"), ("wind", "Wind"), ("hail", "Hail"))
 PANEL_NAMES = {"Overall severe": "Overall Severe", "Tornado": "Tornado", "Wind": "Wind", "Hail": "Hail"}
 
 
+def union_cap(maps):
+    """P(any severe) <= P(tornado) + P(wind) + P(hail): cap the overall map at the sum of its own hazard maps (1 Nov 2026
+    review: the overall ran up to 2x its hazards on small days). maps = [(\"Overall severe\", p), (tor), (wind), (hail)]."""
+    sev = np.minimum(maps[0][1], maps[1][1] + maps[2][1] + maps[3][1])
+    return [(maps[0][0], sev)] + list(maps[1:])
+
+
 def runs_text(res, L, models, day_before_03z=""):
     """Centered block of which runs feed the map: 'ECMWF EPS' / '29/18Z, 30/00Z 06Z 12Z 18Z' per model."""
     lines = []
@@ -211,6 +218,8 @@ def main():
         plot_hhwx.draw(p, f"HHwx Prob {nm} (Calibrated) {tag} (Consistency-Weighted Blend)", O + f"hhwx_d{a.day}latest_{k}_cal.png", spc=spc)
         bmaps.append((nm, p))
         print(f"blend {k} max {p.max():.1f} OKC {at(p, 35.5, -97.5):.1f}")
+    bmaps = union_cap(bmaps)
+    print(f"blend severe (capped at tor+wind+hail) max {bmaps[0][1].max():.1f} OKC {at(bmaps[0][1], 35.5, -97.5):.1f}")
     res = np.load(O + "results.npz")
     draw_panel(bmaps, f"HHwx Calibrated Guidance {tag}" + {"_cam": ": CAMs + NAM 12 km", "_cam_nonam12": ": CAMs"}.get(a.tag, ""),
                O + f"hhwx_d{a.day}latest_panel_blend{a.tag}.png",
@@ -243,8 +252,9 @@ def main():
         plot_hhwx.draw(pt, f"HHwx Prob Tornado (Calibrated) {tag} ({NAMES[m]})", O + f"hhwx_d{a.day}latest_tor_{m}.png", spc=spc)
         plot_hhwx.draw(psev, f"HHwx Prob Severe (Calibrated) {tag} ({NAMES[m]})", O + f"hhwx_d{a.day}latest_sev_{m}.png", spc=spc)
         # one 2x2 image per model: overall, tornado, wind, hail (all calibrated, SPC outline on each)
-        maps = [("Overall severe", psev)] + [(nm, np.where(us, np.minimum(ch.calibrated(res[f"{k}|{L}|{m}|day"] * p_ci, hc[k]), psev), 0))
-                                             for k, nm in HZ]
+        maps = union_cap([("Overall severe", psev)] + [(nm, np.where(us, np.minimum(ch.calibrated(res[f"{k}|{L}|{m}|day"] * p_ci, hc[k]), psev), 0))
+                                                       for k, nm in HZ])
+        psev = maps[0][1]
         draw_panel(maps, f"HHwx Calibrated Guidance {tag}: {NAMES[m]}", O + f"hhwx_d{a.day}latest_panel_{m}.png", spc_pan, a.spc_lead, at,
                    runs=runs_text(res, L, [m]))
         print(f"{m}: severe max {psev.max():.1f} OKC {at(psev, 35.5, -97.5):.1f} | tornado max {pt.max():.1f} OKC {at(pt, 35.5, -97.5):.1f}"

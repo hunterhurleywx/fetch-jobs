@@ -38,10 +38,18 @@ def extent_for(rep, sev):
         pts += list(zip(plots.LAT2[m], plots.LON2[m]))
     if not pts:
         return (-108, -86, 26, 42)
-    la, lo = np.median([p[0] for p in pts]), np.median([p[1] for p in pts])
-    lo = float(np.clip(lo, -113, -79))
-    la = float(np.clip(la, 33.5, 41.5))
-    return (lo - 12, lo + 12, la - 8.5, la + 8.5)
+    m = sev >= 15  # our high area joins the reports, so a split day keeps both halves (2025-04-19 lost Texas)
+    pts += list(zip(plots.LAT2[m], plots.LON2[m]))
+    la_all, lo_all = np.array([p[0] for p in pts]), np.array([p[1] for p in pts])
+    la0, la1 = np.percentile(la_all, [3, 97])
+    lo0, lo1 = np.percentile(lo_all, [3, 97])
+    w = max(24.0, (lo1 - lo0) + 4.0)
+    h = max(17.0, (la1 - la0) + 3.0, w * 17.0 / 24.0)
+    w = max(w, h * 24.0 / 17.0)  # keep the 24:17 shape
+    lo, la = 0.5 * (lo0 + lo1), 0.5 * (la0 + la1)
+    lo = float(np.clip(lo, -126 + w / 2, -66 - w / 2)) if w < 60 else -96.0
+    la = float(np.clip(la, 24 + h / 2, 50 - h / 2)) if h < 26 else 37.0
+    return (lo - w / 2, lo + w / 2, la - h / 2, la + h / 2)
 
 
 def hits(rep, field, thr, types=None):
@@ -120,8 +128,8 @@ def model_maps(z, res, L, m, us, any14, hc):
     lay = [z[f"{L}__{m}__{k}"] for k in ("p_model", "p_lift", "sustain")]
     p_ci = 0.6 * lay[0] + 0.4 * lay[1]
     psev = np.where(us, ch.calibrated(z[f"{L}__{m}__env*ci"], any14), 0)
-    return [("Overall severe", psev)] + [(nm, np.where(us, np.minimum(ch.calibrated(res[f"{k}|{L}|{m}|day"] * p_ci, hc[k]), psev), 0))
-                                         for k, nm in HZ]
+    return rl.union_cap([("Overall severe", psev)] + [(nm, np.where(us, np.minimum(ch.calibrated(res[f"{k}|{L}|{m}|day"] * p_ci, hc[k]), psev), 0))
+                                                    for k, nm in HZ])
 
 
 def do_case(date):
@@ -141,7 +149,8 @@ def do_case(date):
             continue
         r = np.load(p)
         sev = np.where(us, ch.calibrated(r["sev"], any14), 0)
-        maps = [("Overall severe", sev)] + [(nm, np.where(us, np.minimum(ch.calibrated(r[k], hc[k]), sev), 0)) for k, nm in HZ]
+        maps = rl.union_cap([("Overall severe", sev)] + [(nm, np.where(us, np.minimum(ch.calibrated(r[k], hc[k]), sev), 0)) for k, nm in HZ])
+        sev = maps[0][1]
         spc = (rl.spc_hazard_panels(date, L) if L in (1, 2) else None) or plots.spc_lead_polys(date, conv, L)[0]
         w = {m: round(float(r[f"w_{m}"]), 3) for m in MODELS if f"w_{m}" in r.files}
         used = [m for m in MODELS if w.get(m, 0) > 0]

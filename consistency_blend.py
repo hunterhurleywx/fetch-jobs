@@ -49,6 +49,7 @@ def wcorr(a, b, m, w):
 CAM_FAMILY = {"nam", "hrrr", "rap", "refs"}
 FAMILY_SHARE = {1: 0.80, 2: 0.65}  # CAM family's share by lead (Hunter: CAMs get hefty weight from the start)
 TRACK_SHOWN_ONLY = {"rrfs"}  # Hunter: "RRFS is just goofy"
+MAX_W = 0.40  # largest share any one model may take within its group
 GLOBALS = {"gfs", "gefs", "hres", "eps"}  # Hunter (30 Oct, again 1 Nov): Days 2-1 blend no global models; shown only
 
 
@@ -56,6 +57,14 @@ def run_consistency(v, act, W):
     """How consistent a model's own runs have been: successive-run core overlap (IoU of each run's top cells, the
     size of a Slight-risk-like area), core movement (km between core centroids) and swings in its peak (95th pct).
     Returns (score 0-1, iou, move_km, swing) or None with fewer than 2 runs."""
+    # judge runs at least 6 h apart: hourly HRRR / RAP runs look "steady" just because they are 1 h apart (1 Nov review)
+    kept, last = [], None
+    for c, p in v:
+        t = datetime.strptime(c[-10:], "%Y%m%d%H")
+        if last is None or (t - last).total_seconds() >= 6 * 3600:
+            kept.append((c, p))
+            last = t
+    v = kept
     if len(v) < 2:
         return None
     n = max(int(0.12 * act.sum()), 20)
@@ -103,7 +112,20 @@ def track_weights(P, rows, act, W, L, one_family=False):
             raw[m] = (stats[m][0] if stats[m] else low) ** 2
         tot = sum(raw[m] for m in ms) or 1.0
         for m in ms:
-            raw[m] = shares[f] * raw[m] / tot
+            raw[m] = raw[m] / tot
+        for _ in range(10):  # no single model above MAX_W of its group (1 Nov review: NAM family 0.75-0.99 at Day 2)
+            over = [m for m in ms if raw[m] > MAX_W + 1e-9]
+            if not over or len(ms) * MAX_W < 1:
+                break
+            extra = sum(raw[m] - MAX_W for m in over)
+            free = [m for m in ms if raw[m] < MAX_W - 1e-9]
+            for m in over:
+                raw[m] = MAX_W
+            fs = sum(raw[m] for m in free) or 1.0
+            for m in free:
+                raw[m] += extra * raw[m] / fs
+        for m in ms:
+            raw[m] = shares[f] * raw[m]
     print("\nTRACK-RECORD WEIGHTS (no default model weights; every run counts equally)")
     print(f"{'model':5s} family runs  core IoU  move km  peak swing  consistency  weight")
     blend, wsum = 0.0, 0.0
