@@ -139,6 +139,39 @@ def read_ml(m, init, fh, box):
     return st["cape3"].astype(np.float32), lat, lon, u10.astype(np.float32), v10.astype(np.float32)
 
 
+def sfc_vort_native(m, init, fh, box):
+    """Surface relative vorticity (x1e-5 /s) exactly as the HHwx model archive computes it (hhwx.me
+    model_archive/model_ondemand.py c_sfc_vort, read 2 Nov 2026): 10 m wind as decoded, centred differences on the
+    model's native 2-D lat/lon grid, then a uniform filter over ~19 km (HRRR/RRFS 3 km -> 7 cells; RAP 13 km -> 1,
+    none). Returned cropped to the box (flattened) with lat/lon, for regridding."""
+    from scipy.ndimage import uniform_filter
+    url = fetch.RRFS_2D_URL(init, fh) if m == "rrfs" else fetch.CAM_URL[m](init, fh)
+    spec = {"u10": ("UGRD", "10 m above ground", "inst"), "v10": ("VGRD", "10 m above ground", "inst")}
+    wanted = fetch.cam_ranges(fetch.http_get(url + ".idx").decode(), spec, fh)
+    f, lat, lon = {}, None, None
+    for s_, e_, (k, sub_) in wanted:
+        h = fetch._cam_handle(fetch.http_get(url, (s_, e_)), sub_)
+        try:
+            nx, ny = eccodes.codes_get(h, "Nx"), eccodes.codes_get(h, "Ny")
+            f[k] = eccodes.codes_get_values(h).astype(float).reshape(ny, nx)
+            if lat is None:
+                lat = eccodes.codes_get_array(h, "latitudes").reshape(ny, nx)
+                lon = eccodes.codes_get_array(h, "longitudes").reshape(ny, nx)
+        finally:
+            eccodes.codes_release(h)
+    lon = np.where(lon > 180, lon - 360, lon)
+    M = 111320.0
+    dvdx = np.gradient(f["v10"], axis=1) / (np.gradient(lon, axis=1) * M * np.cos(np.radians(lat)))
+    dudy = np.gradient(f["u10"], axis=0) / (np.gradient(lat, axis=0) * M)
+    zeta = (dvdx - dudy) * 1e5
+    grid_km = float(np.nanmedian(np.abs(np.gradient(lat, axis=0)))) * 111.0
+    size = max(1, int(round(19.0 / max(grid_km, 0.5))))
+    if size > 1:
+        zeta = uniform_filter(zeta, size=size, mode="nearest")
+    sel = (lat >= box[0] - 0.5) & (lat <= box[1] + 0.5) & (lon >= box[2] - 0.5) & (lon <= box[3] + 0.5)
+    return zeta[sel].astype(np.float32), lat[sel], lon[sel]
+
+
 def read(m, init, fh, box):
     url = url_of(m, init, fh)
     (s, e, (_, sub)), = fetch.cam_ranges(fetch.http_get(url + ".idx").decode(), SPEC, fh)
@@ -193,9 +226,17 @@ def main():
         g = vals[i].reshape(GLA.shape)
         g[far] = np.nan
         winds[job] = [np.where(far, np.nan, x[i].reshape(GLA.shape)) for x in extra]
+        try:  # HHwx-archive surface vorticity on the native grid, then regridded the same way
+            zv, zla, zlo = sfc_vort_native(m, init, fh, a.box)
+            dz, iz = cKDTree(np.c_[zla, zlo * np.cos(np.deg2rad(35))]).query(np.c_[GLA.ravel(), GLO.ravel() * np.cos(np.deg2rad(35))])
+            zg = zv[iz].reshape(GLA.shape)
+            zg[dz.reshape(GLA.shape) > (0.15 if m == "rap" else 0.06)] = np.nan
+            zetas[job] = zg
+        except Exception as e:
+            print(f"vorticity skip {m} {init:%d/%HZ} f{fh:02d}: {str(e)[:100]}", flush=True)
         return job, g
 
-    winds = {}
+    winds, zetas = {}, {}
     jobs = [(m, i, v) for m, i in runs for v in valid]
     with ThreadPoolExecutor(8) as ex:
         res = dict(ex.map(one, jobs))
@@ -212,6 +253,8 @@ def main():
         save[f"median_{v:%H}"], save[f"mean_{v:%H}"] = med.astype(np.float32), mean.astype(np.float32)
         for (m, i), f_ in zip([(m, i) for m, i in runs if res.get((m, i, v)) is not None], [f for _, f in fields]):
             save[f"{m}_{v:%H}"] = f_.astype(np.float16)
+            if (m, i, v) in zetas:
+                save[f"{m}_zeta_{v:%H}"] = zetas[(m, i, v)].astype(np.float16)
             if len(winds.get((m, i, v), [])) == 2:
                 save[f"{m}_u_{v:%H}"], save[f"{m}_v_{v:%H}"] = (x.astype(np.float16) for x in winds[(m, i, v)])
             save[f"{m}_run"] = np.array(f"{i:%Y%m%d%H}")
