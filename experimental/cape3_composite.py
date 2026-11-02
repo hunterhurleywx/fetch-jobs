@@ -82,7 +82,8 @@ def read_ml(m, init, fh, box):
     import sounding as snd
     hum = "RH" if m == "rap" else "SPFH"
     sfc = {"ps": ("PRES", "surface", "inst"), "zs": ("HGT", "surface", "inst"),
-           "t2": ("TMP", "2 m above ground", "inst"), "q2": ("SPFH", "2 m above ground", "inst")}
+           "t2": ("TMP", "2 m above ground", "inst"), "q2": ("SPFH", "2 m above ground", "inst"),
+           "u10": ("UGRD", "10 m above ground", "inst"), "v10": ("VGRD", "10 m above ground", "inst")}
     lev = {f"{v}{p}": (g, f"{p} mb", "inst") for p in PLEV for v, g in (("t", "TMP"), ("z", "HGT"), ("h", hum))}
     if m == "rrfs":
         blobs = _get(fetch.RRFS_2D_URL(init, fh), sfc, fh, set())
@@ -130,7 +131,12 @@ def read_ml(m, init, fh, box):
     th_ml, r_ml = (th * ml).sum(1) / ml.sum(1), (R * ml).sum(1) / ml.sum(1)
     t_ml = th_ml * (P[:, 0] / 1000.0) ** snd.KAPPA
     st = snd.parcel_stats(T, P, R, np.zeros(ps.size, int), t_ml, r_ml, P[:, 0])
-    return st["cape3"].astype(np.float32), lat, lon
+    # 10 m wind, rotated from the model's Lambert grid to earth-relative (as fetch.earth_relative), for surface vorticity
+    lat1, lov = fetch.CAM_LAMBERT[m]
+    ang = np.sin(np.deg2rad(lat1)) * np.deg2rad(lon - (lov - 360.0))
+    ca, sa = np.cos(ang), np.sin(ang)
+    u10, v10 = ca * f["u10"] + sa * f["v10"], -sa * f["u10"] + ca * f["v10"]
+    return st["cape3"].astype(np.float32), lat, lon, u10.astype(np.float32), v10.astype(np.float32)
 
 
 def read(m, init, fh, box):
@@ -177,15 +183,19 @@ def main():
         m, init, v = job
         fh = int((v - init).total_seconds() // 3600)
         try:
-            vals, la, lo = (read_ml if a.source == "ml" else read)(m, init, fh, a.box)
+            r = (read_ml if a.source == "ml" else read)(m, init, fh, a.box)
+            vals, la, lo, extra = r[0], r[1], r[2], r[3:]
         except Exception as e:
             print(f"skip {m} {init:%d/%HZ} f{fh:02d}: {str(e)[:100]}", flush=True)
             return job, None
         d, i = cKDTree(np.c_[la, lo * np.cos(np.deg2rad(35))]).query(np.c_[GLA.ravel(), GLO.ravel() * np.cos(np.deg2rad(35))])
+        far = d.reshape(GLA.shape) > (0.15 if m == "rap" else 0.06)
         g = vals[i].reshape(GLA.shape)
-        g[d.reshape(GLA.shape) > (0.15 if m == "rap" else 0.06)] = np.nan
+        g[far] = np.nan
+        winds[job] = [np.where(far, np.nan, x[i].reshape(GLA.shape)) for x in extra]
         return job, g
 
+    winds = {}
     jobs = [(m, i, v) for m, i in runs for v in valid]
     with ThreadPoolExecutor(8) as ex:
         res = dict(ex.map(one, jobs))
@@ -202,6 +212,8 @@ def main():
         save[f"median_{v:%H}"], save[f"mean_{v:%H}"] = med.astype(np.float32), mean.astype(np.float32)
         for (m, i), f_ in zip([(m, i) for m, i in runs if res.get((m, i, v)) is not None], [f for _, f in fields]):
             save[f"{m}_{v:%H}"] = f_.astype(np.float16)
+            if len(winds.get((m, i, v), [])) == 2:
+                save[f"{m}_u_{v:%H}"], save[f"{m}_v_{v:%H}"] = (x.astype(np.float16) for x in winds[(m, i, v)])
             save[f"{m}_run"] = np.array(f"{i:%Y%m%d%H}")
         used = ", ".join(f"{NAMES[m]} {i:%d/%HZ} f{int((v - i).total_seconds() // 3600):02d}" for m, i in runs if res.get((m, i, v)) is not None)
         panels.append((v, med, used))
