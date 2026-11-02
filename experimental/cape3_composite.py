@@ -200,6 +200,9 @@ def main():
         stack = np.stack([f for _, f in fields])
         med, mean = np.nanmedian(stack, axis=0), np.nanmean(stack, axis=0)
         save[f"median_{v:%H}"], save[f"mean_{v:%H}"] = med.astype(np.float32), mean.astype(np.float32)
+        for (m, i), f_ in zip([(m, i) for m, i in runs if res.get((m, i, v)) is not None], [f for _, f in fields]):
+            save[f"{m}_{v:%H}"] = f_.astype(np.float16)
+            save[f"{m}_run"] = np.array(f"{i:%Y%m%d%H}")
         used = ", ".join(f"{NAMES[m]} {i:%d/%HZ} f{int((v - i).total_seconds() // 3600):02d}" for m, i in runs if res.get((m, i, v)) is not None)
         panels.append((v, med, used))
         fig = plt.figure(figsize=(11, 8.2))
