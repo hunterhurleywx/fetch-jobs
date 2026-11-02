@@ -31,6 +31,7 @@
 !/bust_summary.py
 !/calibrate_hazards.py
 !/plot_hhwx.py
+!/sounding.py
 !/experimental/
 /experimental/*
 !/experimental/draw_track_cases.py
