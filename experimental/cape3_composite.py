@@ -172,6 +172,59 @@ def sfc_vort_native(m, init, fh, box):
     return zeta[sel].astype(np.float32), lat[sel], lon[sel]
 
 
+HODOLV = [1000, 950, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250]  # HHwx hodomap levels
+HODO_SAMP = np.array([0, 250, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7500, 9000, 12000], float)  # m AGL
+
+
+def hodo_points(box_ext, spacing_km=50.0):
+    """Points ~spacing_km apart over the map extent [lon0, lon1, lat0, lat1]."""
+    lat0, lat1 = box_ext[2], box_ext[3]
+    dlat = spacing_km / 111.2
+    lats = np.arange(lat0 + dlat / 2, lat1, dlat)
+    dlon = spacing_km / (111.2 * np.cos(np.deg2rad(0.5 * (lat0 + lat1))))
+    lons = np.arange(box_ext[0] + dlon / 2, box_ext[1], dlon)
+    LO, LA = np.meshgrid(lons, lats)
+    return LA.ravel(), LO.ravel()
+
+
+def hodo_profiles(m, init, fh, box, plat, plon):
+    """Wind profiles at the points, as the HHwx hodomap (model_ondemand.prep_hodograph): u/v/HGT on HODOLV,
+    interpolated to HODO_SAMP heights AGL, lowest point = 10 m wind, kt. Winds rotated to earth-relative."""
+    lev = {f"{c}{p}": (g, f"{p} mb", "inst") for p in HODOLV for c, g in (("u", "UGRD"), ("v", "VGRD"), ("z", "HGT"))}
+    sfc = {"zs": ("HGT", "surface", "inst"), "u10": ("UGRD", "10 m above ground", "inst"),
+           "v10": ("VGRD", "10 m above ground", "inst")}
+    if m == "rrfs":
+        f, lat, lon = _native(_get(fetch.RRFS_2D_URL(init, fh), sfc, fh, set()), box)
+        f3, _, _ = _native(_get(fetch.CAM_URL["rrfs"](init, fh), lev, fh, set(lev)), box)
+        f.update(f3)
+    else:
+        f, lat, lon = _native(_get(fetch.CAM_URL[m](init, fh), {**sfc, **lev}, fh, set(lev)), box)
+    _, idx = cKDTree(np.c_[lat, lon * np.cos(np.deg2rad(36))]).query(np.c_[plat, plon * np.cos(np.deg2rad(36))])
+    lat1, lov = fetch.CAM_LAMBERT[m]
+    ang = np.sin(np.deg2rad(lat1)) * np.deg2rad(lon[idx] - (lov - 360.0))
+    ca, sa = np.cos(ang), np.sin(ang)
+    rot = lambda u, v: (ca * u + sa * v, -sa * u + ca * v)
+    levs = [p for p in HODOLV if all(f"{c}{p}" in f for c in "uvz")]
+    U = np.stack([f[f"u{p}"][idx] for p in levs]); V = np.stack([f[f"v{p}"][idx] for p in levs])
+    Z = np.stack([f[f"z{p}"][idx] for p in levs]) - f["zs"][idx][None]
+    U, V = rot(U, V)
+    u10, v10 = rot(f["u10"][idx], f["v10"][idx])
+    n = plat.size
+    UO = np.full((n, HODO_SAMP.size), np.nan); VO = np.full_like(UO, np.nan)
+    for k in range(n):
+        zc, uc, vc = Z[:, k], U[:, k], V[:, k]
+        o = np.argsort(zc)
+        zc, uc, vc = zc[o], uc[o], vc[o]
+        keep = zc > 10.0
+        if keep.sum() < 3:
+            continue
+        hs = HODO_SAMP <= zc[keep][-1]
+        UO[k, hs] = np.interp(HODO_SAMP[hs], zc[keep], uc[keep])
+        VO[k, hs] = np.interp(HODO_SAMP[hs], zc[keep], vc[keep])
+        UO[k, 0], VO[k, 0] = u10[k], v10[k]
+    return (UO * 1.94384).astype(np.float32), (VO * 1.94384).astype(np.float32)
+
+
 def read(m, init, fh, box):
     url = url_of(m, init, fh)
     (s, e, (_, sub)), = fetch.cam_ranges(fetch.http_get(url + ".idx").decode(), SPEC, fh)
@@ -202,6 +255,7 @@ def main():
     ap.add_argument("--box", type=float, nargs=4, default=[32.5, 38.5, -102.5, -94.0])
     ap.add_argument("--source", choices=["ml", "grib"], default="ml")
     ap.add_argument("--target", type=float, nargs=2, default=None, help="lat lon of a target marker")
+    ap.add_argument("--hodo", type=float, nargs=4, default=None, help="hodograph points over lon0 lon1 lat0 lat1 (~50 km apart)")
     a = ap.parse_args()
     out = os.environ.get("POGS_CAPE3_OUT", "cape3_out")
     os.makedirs(out, exist_ok=True)
@@ -226,6 +280,11 @@ def main():
         g = vals[i].reshape(GLA.shape)
         g[far] = np.nan
         winds[job] = [np.where(far, np.nan, x[i].reshape(GLA.shape)) for x in extra]
+        if a.hodo:
+            try:
+                hodos[job] = hodo_profiles(m, init, fh, a.box, plat, plon)
+            except Exception as e:
+                print(f"hodograph skip {m} {init:%d/%HZ} f{fh:02d}: {str(e)[:100]}", flush=True)
         try:  # HHwx-archive surface vorticity on the native grid, then regridded the same way
             zv, zla, zlo = sfc_vort_native(m, init, fh, a.box)
             dz, iz = cKDTree(np.c_[zla, zlo * np.cos(np.deg2rad(35))]).query(np.c_[GLA.ravel(), GLO.ravel() * np.cos(np.deg2rad(35))])
@@ -236,7 +295,8 @@ def main():
             print(f"vorticity skip {m} {init:%d/%HZ} f{fh:02d}: {str(e)[:100]}", flush=True)
         return job, g
 
-    winds, zetas = {}, {}
+    winds, zetas, hodos = {}, {}, {}
+    plat, plon = hodo_points(a.hodo) if a.hodo else (None, None)
     jobs = [(m, i, v) for m, i in runs for v in valid]
     with ThreadPoolExecutor(8) as ex:
         res = dict(ex.map(one, jobs))
@@ -253,6 +313,8 @@ def main():
         save[f"median_{v:%H}"], save[f"mean_{v:%H}"] = med.astype(np.float32), mean.astype(np.float32)
         for (m, i), f_ in zip([(m, i) for m, i in runs if res.get((m, i, v)) is not None], [f for _, f in fields]):
             save[f"{m}_{v:%H}"] = f_.astype(np.float16)
+            if (m, i, v) in hodos:
+                save[f"{m}_hodou_{v:%H}"], save[f"{m}_hodov_{v:%H}"] = hodos[(m, i, v)]
             if (m, i, v) in zetas:
                 save[f"{m}_zeta_{v:%H}"] = zetas[(m, i, v)].astype(np.float16)
             if len(winds.get((m, i, v), [])) == 2:
@@ -291,6 +353,8 @@ def main():
                      + ", ".join(f"{NAMES[m]} {i:%d/%HZ}" for m, i in runs), fontsize=13)
         fig.savefig(os.path.join(out, "cape3_panel.png"), dpi=100, bbox_inches="tight")
         plt.close(fig)
+    if a.hodo:
+        save["hodo_lat"], save["hodo_lon"], save["hodo_h"] = plat, plon, HODO_SAMP
     np.savez_compressed(os.path.join(out, f"cape3_{a.date}.npz"), **save)
 
 
