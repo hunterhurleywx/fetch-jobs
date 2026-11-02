@@ -42,6 +42,7 @@
 !/experimental/weight_features.py
 !/experimental/mode_env.py
 !/experimental/cape3_composite.py
+!/experimental/spc_match.py
 !/calib/
 
 __pycache__/

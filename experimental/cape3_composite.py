@@ -80,7 +80,7 @@ def _get(url, spec, fh, optional):
 def read_ml(m, init, fh, box):
     """100 mb mixed-layer CAPE below 3 km AGL (SPC mesoanalysis 3CAPE) from the model's own profiles."""
     import sounding as snd
-    hum = "RH" if m == "rap" else "SPFH"
+    hum = "RH" if m.startswith("rap") else "SPFH"
     sfc = {"ps": ("PRES", "surface", "inst"), "zs": ("HGT", "surface", "inst"),
            "t2": ("TMP", "2 m above ground", "inst"), "q2": ("SPFH", "2 m above ground", "inst"),
            "u10": ("UGRD", "10 m above ground", "inst"), "v10": ("VGRD", "10 m above ground", "inst")}

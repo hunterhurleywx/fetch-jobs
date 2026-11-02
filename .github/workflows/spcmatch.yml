@@ -1,0 +1,32 @@
+name: spc-match
+run-name: spc-match RAP ${{ inputs.init }} f${{ inputs.fh }}
+on:
+  workflow_dispatch:
+    inputs:
+      init:
+        description: "RAP init YYYYMMDDHH"
+        required: true
+      fh:
+        description: "Forecast hour"
+        default: "1"
+      extra:
+        description: "Extra arguments (e.g. --extent -124 -101 29.5 42.5)"
+        default: ""
+jobs:
+  match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt scipy pandas shapely matplotlib cartopy scikit-learn
+      - name: RAP vs SPC mesoanalysis 3CAPE + surface vorticity (experimental/spc_match.py)
+        env:
+          POGS_SPCM_OUT: ${{ github.workspace }}/spcm_out
+        run: python -u experimental/spc_match.py --init ${{ inputs.init }} --fh ${{ inputs.fh }} ${{ inputs.extra }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spcmatch-${{ inputs.init }}-f${{ inputs.fh }}
+          path: spcm_out
