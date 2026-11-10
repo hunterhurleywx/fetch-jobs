@@ -64,6 +64,11 @@ def main():
                 continue
             P[m] = {hz: [(c, ci.finals(res[f"{s}|{L}|{m}|cyc{c}"], *lay)[1]["env*ci"]) for c in cyc]
                     for hz, s in SCHEME.items()}
+            if f"{L}__{m}__p_model_uh" in z.files:  # EXPERIMENTAL (10 Nov 2026): same product with the UH-based CI layer
+                lay_uh = [z[f"{L}__{m}__p_model_uh"]] + lay[1:]
+                for hz, s in SCHEME.items():
+                    save[f"{L}|{m}|{hz}|uh"] = np.where(us, np.mean(
+                        [ci.finals(res[f"{s}|{L}|{m}|cyc{c}"], *lay_uh)[1]["env*ci"] for c in cyc], axis=0), 0).astype(np.float16)
         if not P:
             continue
         act = us & (np.max([p for v in P.values() for _, p in v["sev"]], axis=0) > 0.05)

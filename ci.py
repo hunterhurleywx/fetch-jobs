@@ -58,11 +58,18 @@ def ramp(x, lo, hi):
 
 
 CAM_DBZ = 40.0  # CAM "storm fired": composite reflectivity >= 40 dBZ anywhere in the cell, any hour
+# EXPERIMENTAL (10 Nov 2026, Nadocast lesson B1): the same "fired" test on 2-5 km updraft helicity (hourly max) >= 25
+# m2/s2 (HREF's low UH threshold; Nadocast's top weather input). Computed from the same hourly files and saved as
+# extra keys <lead>|<model>|p_model_uh; the live product still uses REFC. RAP has no UH (no key is written for it).
+CAM_UH = 25.0
+_UH_HITS = {}  # (model, init, mem) -> bool map from the last cam_fired call over the full window
+_UH_LAYER = {}  # (model, init, mem) -> UH-based p_model (3x3 dilated), set by member_layers
 
 
 def cam_fired(model, init, valid, mem="det"):
-    """Explicit-convection indicator from the hourly 18Z-06Z REFC files (None if too few hours)."""
-    hits, n = None, 0
+    """Explicit-convection indicator from the hourly 18Z-06Z REFC files (None if too few hours).
+    Also records the UH >= CAM_UH indicator for the same hours in _UH_HITS (if the files carry uh25)."""
+    hits, uh, n = None, None, 0
     t, end = valid[0], valid[-1]
     while t <= end:
         fh = int((t - init).total_seconds() // 3600)
@@ -70,8 +77,12 @@ def cam_fired(model, init, valid, mem="det"):
         if r is not None:
             f = np.nan_to_num(r["refc"], nan=-99) >= CAM_DBZ
             hits = f if hits is None else (hits | f)
+            if r.get("uh25") is not None:
+                u = np.nan_to_num(r["uh25"], nan=0) >= CAM_UH
+                uh = u if uh is None else (uh | u)
             n += 1
         t += timedelta(hours=1)
+    _UH_HITS[(model, init, mem)] = uh if n >= 3 else None
     return hits if n >= 3 else None
 
 
@@ -127,10 +138,12 @@ def member_layers(model, init, mem, valid, windows=None):
     first, last = vt[0], vt[-1]
     cape_any = np.max([np.nan_to_num(main[v].get("cape90", main[v].get("cape180", main[v].get("capemu"))))
                        for v in vt], axis=0)
+    uh_hits = None
     if cam:
         fired = cam_fired(model, init, valid, mem)
         if fired is None:
             return None
+        uh_hits = _UH_HITS.get((model, init, mem))  # full window; the block calls below overwrite _UH_HITS
     elif model == "gfs" and "acpcp" in extra[first] and "acpcp" in extra[last]:
         pr = extra[last]["acpcp"] - extra[first]["acpcp"]
         fired = pr >= 1.0
@@ -152,6 +165,7 @@ def member_layers(model, init, mem, valid, windows=None):
     else:
         return None
     p_model = maximum_filter(fired.astype(float), size=3)
+    _UH_LAYER[(model, init, mem)] = None if uh_hits is None else maximum_filter(uh_hits.astype(float), size=3)
     # --- physical lift and sustainment
     lift, sus = [], []
     for v in vt:
@@ -178,20 +192,25 @@ def member_layers(model, init, mem, valid, windows=None):
 WINDOWS = {"b21": (0, 1), "b00": (1, 2), "b03": (2, 3), "b06": (3, 4)}  # indices into valid (18, 21, 00, 03, 06Z)
 
 
-def layers_for_lead(inits, valid, lead=None, cams=None, win_out=None):
+def layers_for_lead(inits, valid, lead=None, cams=None, win_out=None, uh_out=None):
     """cams: {model: [inits]} for the CAMs that join this lead (config.cam_pools).
 
-    win_out: optional dict, filled with {name: (per_model {m: (p_model, p_lift)}, blend (p_model, p_lift))}."""
+    win_out: optional dict, filled with {name: (per_model {m: (p_model, p_lift)}, blend (p_model, p_lift))}.
+    uh_out: optional dict, filled with {model: UH-based p_model} for CAMs whose files carry uh25 (experimental)."""
     cams = cams or {}
     windows = {n: (valid[a], valid[b]) for n, (a, b) in WINDOWS.items()}
     out, wacc = {}, {n: {} for n in windows}
     for m in MODELS + [c for c in CAM_MODELS if c in cams]:
         acc = [[], [], []]
+        acc_uh, n_ok = [], 0
         wa = {n: ([], []) for n in windows}
         for init in cams.get(m, inits):
             for mem in run_case.members_of(m):
                 r = member_layers(m, init, mem, valid, windows)
                 if r is not None:
+                    n_ok += 1
+                    if _UH_LAYER.get((m, init, mem)) is not None:
+                        acc_uh.append(_UH_LAYER[(m, init, mem)])
                     for k in range(3):
                         acc[k].append(r[k])
                     for n, (pm_w, pl_w) in r[3].items():
@@ -199,6 +218,8 @@ def layers_for_lead(inits, valid, lead=None, cams=None, win_out=None):
                             wa[n][0].append(pm_w)
                             wa[n][1].append(pl_w)
         out[m] = [np.mean(a, axis=0) if a else None for a in acc]
+        if uh_out is not None and acc_uh and len(acc_uh) == n_ok:  # only when every member-run had UH
+            uh_out[m] = np.mean(acc_uh, axis=0)
         for n in windows:
             wacc[n][m] = tuple(np.mean(a, axis=0) if a else None for a in wa[n])
     blend = []
@@ -244,8 +265,10 @@ def main():
         label = vc.report_mask(rep)
     rows, save = [], {}
     for lead in a.leads:
-        win = {}
-        per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid, lead, cam_pools(conv_day, lead), win)
+        win, uh = {}, {}
+        per_model, (pm, pl, s) = layers_for_lead(pools[lead], valid, lead, cam_pools(conv_day, lead), win, uh)
+        for m, puh in uh.items():  # EXPERIMENTAL UH-based storm-start layer (not used by any live product)
+            save[f"{lead}|{m}|p_model_uh"] = puh
         env = res[f"{a.env}|{lead}|blend|day"]
         p_ci, fin = finals(env, pm, pl, s)
         save.update({f"{lead}|p_model": pm, f"{lead}|p_lift": pl, f"{lead}|sustain": s, f"{lead}|p_ci": p_ci})
