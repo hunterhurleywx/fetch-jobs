@@ -33,9 +33,21 @@ def runs(limit=100):
                          "databaseId,displayTitle,status,conclusion", "-L", str(limit)))
 
 
+def run_title(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, pool_end="", srh="2pt", skip="", track=False, mode=False):
+    """The run-name each workflow gives a dispatch: must mirror the `run-name:` line of case.yml / aws_case.yml exactly
+    (they differ in order and content; 10 Nov 2026 a mismatch left the launcher waiting forever)."""
+    t = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "")
+    if aws:  # aws_case.yml: CAMs, pool, EC CIN, add-ons, then " | aws" (no srh / skip / track / mode tags)
+        return t + (f" | pool to {pool_end}" if pool_end else "") + (" | no EC CIN" if ec_cin == "0" else "") + \
+            (" | no add-ons" if addons == "0" else "") + " | aws"
+    return t + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + \
+        (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + \
+        (" | frozen" if skip else "") + (" | track" if track else "") + (" | mode" if mode else "")
+
+
 def trigger(date, leads, cam_runs="", ec_cin="1", addons="1", aws=False, attempts="", pool_end="", srh="2pt", skip="", track=False, mode=False):
     """Dispatch one case and return its run id, matched by run-name."""
-    title = f"case {date} | {' '.join(leads)}" + (" | latest CAMs" if cam_runs else "") + (" | no EC CIN" if ec_cin == "0" else "") + (" | no add-ons" if addons == "0" else "") + (f" | pool to {pool_end}" if pool_end else "") + (f" | srh {srh}" if srh != "2pt" else "") + (" | track" if track else "") + (" | mode" if mode else "") + (" | aws" if aws else "")
+    title = run_title(date, leads, cam_runs, ec_cin, addons, aws, pool_end, srh, skip, track, mode)
     before = {r["databaseId"] for r in runs()}
     gh("workflow", "run", WORKFLOW, "-R", REPO, "-f", f"date={date}", "-f", f"leads={' '.join(leads)}",
        "-f", f"cam_runs={cam_runs}", "-f", f"ec_cin={ec_cin}", "-f", f"addons={addons}",
