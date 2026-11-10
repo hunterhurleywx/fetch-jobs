@@ -35,7 +35,7 @@ import ci
 import plot_hhwx
 import plots
 import scoring
-from config import CASES_DIR, POOL_CYCLES
+from config import CASES_DIR, POOL_CYCLES, RETIRED
 
 ramp = scoring.ramp
 
@@ -174,7 +174,7 @@ def main():
     base = scoring.weights(L)
     P = {}
     for m in ("gfs", "gefs", "hres", "eps", "nam12", "rrfs", "nam", "hrrr", "rap", "refs"):
-        if f"{L}__{m}__p_model" not in z.files or m in a.exclude:
+        if f"{L}__{m}__p_model" not in z.files or m in a.exclude or m in RETIRED:  # retired: NAM 3 km / NAM 12 km
             continue
         lay = [z[f"{L}__{m}__{k}"] for k in ("p_model", "p_lift", "sustain")]
         ks = sorted(k for k in res.files if k.startswith(f"v2|{L}|{m}|cyc"))

@@ -30,7 +30,7 @@ import calibrate_hazards as ch
 import plot_hhwx
 import scoring
 import plots
-from config import CASES_DIR, POOL_CYCLES
+from config import CASES_DIR, POOL_CYCLES, RETIRED
 
 LV = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
 CM = ListedColormap(["#efedf5", "#dadaeb", "#bcbddc", "#9e9ac8", "#807dba", "#6a51a3", "#54278f", "#3f007d"])
@@ -243,7 +243,7 @@ def main():
     # per model (pooled runs): severe and tornado
     res, z = np.load(O + "results.npz"), np.load(O + "ci_layers.npz")
     for m in NAMES:
-        if f"{L}__{m}__p_model" not in z.files:
+        if f"{L}__{m}__p_model" not in z.files or m in RETIRED:  # retired: NAM 3 km / NAM 12 km
             continue
         lay = [z[f"{L}__{m}__{k}"] for k in ("p_model", "p_lift", "sustain")]
         p_ci = 0.6 * lay[0] + 0.4 * lay[1]

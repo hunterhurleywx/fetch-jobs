@@ -170,9 +170,17 @@ NAM12_X_FIELDS = {"acpcpb": ("ACPCP", "surface", "acc3"), "rh700": ("RH", "700 m
 # runs bullish; raise its weight only once the 18Z / 00Z runs show it is any good).
 # Hunter, 31 Oct: RRFS (and the NAM) only barely weighted at Day 3: near the end of their range and jumpy.
 # NAM 3 km joins Day 3 only through a POGS_CAM_RUNS override (its 60 h runs reach the window from the issue-day 12Z on).
-CAM_BLEND = {3: (0.92, {"nam12": 0.04, "rrfs": 0.04, "nam": 0.04}),
-             2: (0.0, {"nam": 0.35, "hrrr": 0.25, "nam12": 0.25, "rap": 0.15}),
-             1: (0.0, {"hrrr": 0.40, "nam": 0.25, "rap": 0.20, "nam12": 0.15})}
+# NAM 3 km ("nam") and NAM 12 km ("nam12") retired 3 Nov 2026 12Z (with HREF/SREF). Hunter, 10 Nov 2026: drop them
+# from every list; keep them only for archived-data studies, opt-in with POGS_USE_RETIRED=1. Their old shares are
+# re-normalised over the remaining models (base-mode weights; the live track blend weights by consistency anyway).
+RETIRED = set() if os.environ.get("POGS_USE_RETIRED") == "1" else {"nam", "nam12"}
+CAM_BLEND = {3: (0.96, {"rrfs": 0.04}),
+             2: (0.0, {"hrrr": 0.625, "rap": 0.375}),
+             1: (0.0, {"hrrr": 0.667, "rap": 0.333})}
+if not RETIRED:  # archived studies: the pre-retirement weights
+    CAM_BLEND = {3: (0.92, {"nam12": 0.04, "rrfs": 0.04, "nam": 0.04}),
+                 2: (0.0, {"nam": 0.35, "hrrr": 0.25, "nam12": 0.25, "rap": 0.15}),
+                 1: (0.0, {"hrrr": 0.40, "nam": 0.25, "rap": 0.20, "nam12": 0.15})}
 
 
 def cam_pools(conv_day, lead):
@@ -193,7 +201,7 @@ def cam_pools(conv_day, lead):
     for part in filter(None, os.environ.get("POGS_CAM_RUNS", "").split(";")):
         m, runs = part.split(":")
         pools[m.strip()] = [datetime.strptime(r.strip(), "%Y%m%d%H") for r in runs.split(",")]
-    return pools
+    return {m: v for m, v in pools.items() if m not in RETIRED}  # NAM 3 km / NAM 12 km retired (see RETIRED)
 
 
 def fh_available(model, init, fh):

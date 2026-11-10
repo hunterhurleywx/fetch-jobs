@@ -45,15 +45,15 @@ jobs:
     env:
       POGS_CACHE: ${{ github.workspace }}/../pogs_cache  # main disk, not /tmp: GitHub now mounts /tmp as a 7.7 GB tmpfs (Disk quota exceeded, 1 Nov 2026)
       POGS_CASES: ${{ github.workspace }}/cases
-      MAIN_MODELS: gfs gefs hres eps hrrr nam rap nam12 rrfs refs eps_z
-      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x rrfs_ci refs_ci
+      MAIN_MODELS: gfs gefs hres eps hrrr rap rrfs refs eps_z  # NAM 3 km / NAM 12 km retired 3 Nov 2026
+      X_MODELS: gfs_x gefs_x hres_x eps_x hrrr_ci rap_ci rrfs_ci refs_ci
       # upper air: its own pass after main/x. Decode is the bottleneck on the 4-core runner (bench_download.py, 31 Oct:
       # download saturates ~125-140 MB/s at 32-64 threads; eccodes ~10 ms / field), so every pass uses all 4 decode procs.
       UA_MODELS: gfs_snd hres_snd gefs_pl eps_pl
       # add-on sets adopted 31 Oct 2026 (config.ADD_FIELDS); EPS add-on is the heavy one, so it gets its own pass
-      ADD_MODELS: gfs_add gefs_add hres_add hrrr_add nam_add rap_add nam12_add hrrr_sfc
+      ADD_MODELS: gfs_add gefs_add hres_add hrrr_add rap_add hrrr_sfc
       EPS_ADD: eps_add
-      SRH_MODELS: hrrr_srh nam_srh rap_srh nam12_srh rrfs_srh refs_srh  # native helicity, only with srh=native
+      SRH_MODELS: hrrr_srh rap_srh rrfs_srh refs_srh  # native helicity, only with srh=native
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}

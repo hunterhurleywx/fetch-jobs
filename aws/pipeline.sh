@@ -8,10 +8,10 @@ N=$(nproc)
 D="$DATE"
 L="cases/$D/logs"
 mkdir -p "$L"
-MAIN_MODELS="gfs gefs hres eps hrrr nam rap nam12 rrfs refs eps_z"
-X_MODELS="gfs_x gefs_x hres_x eps_x hrrr_ci nam_ci rap_ci nam12_ci nam12_x rrfs_ci refs_ci"
+MAIN_MODELS="gfs gefs hres eps hrrr rap rrfs refs eps_z"  # NAM 3 km / NAM 12 km retired 3 Nov 2026
+X_MODELS="gfs_x gefs_x hres_x eps_x hrrr_ci rap_ci rrfs_ci refs_ci"
 UA_MODELS="gfs_snd hres_snd gefs_pl eps_pl"
-ADD_MODELS="gfs_add gefs_add hres_add hrrr_add nam_add rap_add nam12_add hrrr_sfc"
+ADD_MODELS="gfs_add gefs_add hres_add hrrr_add rap_add hrrr_sfc"
 EPS_ADD="eps_add"
 PCL_MODELS="hres_pcl eps_pcl"
 export POGS_CAM_RUNS="${CAM_RUNS:-}" POGS_EC_CIN="${EC_CIN:-1}"
