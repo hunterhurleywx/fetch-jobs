@@ -1,0 +1,88 @@
+# hhwx.me Radar Archive - Mobile Radar Finder: convert every indexed mobile-radar
+# scan (all products, all tilts) on 20 free runners, check each one decodes,
+# store the results in the private S3 bucket hhwx-mobile-radar and push them to
+# the hhwx.me cache. Scripts: mobile/mobile_shard.py, mobile_push.py, mobile_summary.py.
+name: mobile-convert
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Comma list of deployment ids (blank = every deployment)'
+        default: ''
+      push_server:
+        description: 'Also push the results to the hhwx.me cache'
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  convert:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    env:
+      MOBILE_SRC_TOKEN: ${{ secrets.MOBILE_SRC_TOKEN }}
+      PYART_QUIET: '1'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mobile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install --quiet arm_pyart==2.2.2 netCDF4 requests "numpy<2.5"
+      - name: Convert shard ${{ matrix.shard }}
+        run: python -u mobile/mobile_shard.py --shard ${{ matrix.shard }} --of 20 --only "${{ inputs.only }}" --out out
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+      - name: Store in S3
+        run: |
+          if [ -d out/cache ]; then aws s3 sync out/cache s3://hhwx-mobile-radar/cache/ --only-show-errors; fi
+          aws s3 cp out/report.jsonl s3://hhwx-mobile-radar/reports/${{ github.run_id }}/shard${{ matrix.shard }}/report.jsonl --only-show-errors
+      - name: Push to hhwx.me cache
+        if: ${{ inputs.push_server }}
+        run: python -u mobile/mobile_push.py out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-${{ matrix.shard }}
+          path: out/report.jsonl
+          if-no-files-found: ignore
+
+  summary:
+    needs: convert
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mobile
+      - uses: actions/download-artifact@v4
+        with:
+          path: reports
+      - name: Summarise
+        run: python mobile/mobile_summary.py reports >> "$GITHUB_STEP_SUMMARY"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+      - name: Store summary
+        run: |
+          aws s3 cp summary.json s3://hhwx-mobile-radar/reports/${{ github.run_id }}/summary.json --only-show-errors
+          aws s3 cp summary.md s3://hhwx-mobile-radar/reports/${{ github.run_id }}/summary.md --only-show-errors
+      - uses: actions/upload-artifact@v4
+        with:
+          name: summary
+          path: summary.*
