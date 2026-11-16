@@ -187,8 +187,9 @@ def main():
     ok = bad = 0
     t0 = time.time()
     ctx = mp.get_context('spawn')                     # HDF5 is not fork/thread safe
-    with ProcessPoolExecutor(a.procs, mp_context=ctx, initializer=_init, initargs=(here,),
-                             max_tasks_per_child=40) as pool:
+    # No max_tasks_per_child: recycling spawn workers hangs the pool on 3.12
+    # (every shard froze at 4 x 40 = 160 scans, run 43970937446).
+    with ProcessPoolExecutor(a.procs, mp_context=ctx, initializer=_init, initargs=(here,)) as pool:
         futs = []
         for dep_id, x, b in mine:
             d = byid[dep_id]
