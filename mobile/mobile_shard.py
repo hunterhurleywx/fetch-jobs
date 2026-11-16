@@ -18,7 +18,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import requests
 
 SRV = os.environ.get('MOBILE_SRV', 'https://hhwx.me/api/mobile')
-TOK = os.environ.get('MOBILE_SRC_TOKEN', '')
+TOK = os.environ.get('MOBILE_SRC_TOKEN', '').strip()
 GROUPS = {'base': ('REF', 'ZDR', 'CC'), 'vel': ('VEL',)}
 PRODS = ('REF', 'VEL', 'ZDR', 'CC')
 UNIT = 120          # scans per work unit (big deployments spread over shards)

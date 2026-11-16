@@ -5,7 +5,7 @@ import io, os, sys, tarfile, time
 import requests
 
 SRV = os.environ.get('MOBILE_SRV', 'https://hhwx.me/api/mobile')
-TOK = os.environ['MOBILE_SRC_TOKEN']
+TOK = os.environ['MOBILE_SRC_TOKEN'].strip()
 root = os.path.join(sys.argv[1] if len(sys.argv) > 1 else 'out', 'cache')
 CHUNK = 150
 stored = rejected = 0
