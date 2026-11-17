@@ -257,6 +257,7 @@ def main():
     os.makedirs(a.work, exist_ok=True)
     rep = open(os.path.join(a.out, 'report.jsonl'), 'w')
     scans, k, fails = [], 0, 0
+    seen_swp = set()
     t_all = time.time()
     ctx = mp.get_context('spawn')
     with ProcessPoolExecutor(a.procs, mp_context=ctx, initializer=_init, initargs=(here,)) as pool:
@@ -281,7 +282,7 @@ def main():
                             print('  no usable position, skipped', nm, flush=True)
                             continue
                         ref = {'kind': 'pinned', 'url': u, 'member': nm, **flags}
-                        scans.append({'ref': ref, 'name': nm, 'k': rec['k'], **m})
+                        scans.append({'ref': ref, 'name': nm, 'k': rec['k'], 'tag': radar_tag(nm), **m})
                     elif not rec.get('skip'):
                         fails += 1
                         print(f'  FAIL {nm}: {rec.get("err")}', flush=True)
@@ -306,6 +307,15 @@ def main():
                 base = os.path.basename(nm)
                 if src.get('include') and not re.search(src['include'], nm):
                     continue                          # e.g. only the DOW folders, not the NEXRAD/code in the same zip
+                if src.get('exclude') and re.search(src['exclude'], nm):
+                    continue
+                if base.startswith('swp.'):
+                    tg = radar_tag(nm)
+                    if re.fullmatch(r'K[A-Z]{3}', tg or ''):
+                        continue                      # WSR-88D sweeps bundled with the trucks
+                    if (tg, base) in seen_swp:
+                        continue                      # the same sweep kept in several folders (edited/by-elevation copies)
+                    seen_swp.add((tg, base))
                 if base.startswith('swp.'):
                     if 'RHI' in base.upper():
                         continue
@@ -332,8 +342,7 @@ def main():
         return
     if not scans:
         sys.exit(f'{a.source}: no scans converted ({fails} failed)')
-    scans.sort(key=lambda s: s['t0'])
-    deps = bi.group(src, scans, P)
+    scans, deps = group_all(src, scans, P, bi)
     i = 0
     for d in deps:
         d['pinned'] = True
@@ -351,6 +360,36 @@ def main():
               f" {d['nscans']} scans, {len(d['angles'])} angles, {d['products']}", flush=True)
 
 
+def radar_tag(nm):
+    """Radar named in a DORADE sweep file name (swp.<time>.<RADAR>.<n>...), else ''."""
+    m = re.match(r'swp\.\d+\.([^.]+)\.', os.path.basename(nm))
+    if not m:                                   # a merged volume: <folder>/<RADAR>_v<n>[.nc]
+        m = re.search(r'([A-Za-z0-9]+)_v\d+(\.nc)?$', nm)
+    return m.group(1).upper() if m else ''
+
+
+def group_all(src, scans, P, bi):
+    """Deployments for a source: one radar (src['radar']), or, with src['radars'] =
+    {tag: display name}, one set per radar tag found in the files. Returns the scans
+    in the order the deployments list them, so cache files are renamed in step."""
+    if not src.get('radars'):
+        scans.sort(key=lambda s: s['t0'])
+        return scans, bi.group(src, scans, P)
+    order, deps = [], []
+    for tag in sorted({s.get('tag') or '' for s in scans}):
+        name = src['radars'].get(tag)
+        if not name:
+            print(f'  radar tag {tag!r} not in this source, skipped', flush=True)
+            continue
+        ss = sorted((s for s in scans if (s.get('tag') or '') == tag), key=lambda s: s['t0'])
+        sub = {**src, 'id': f"{src['id']}-{name.lower().replace(' ', '').replace('-', '')}", 'radar': name}
+        for d in bi.group(sub, ss, P):
+            d['source'] = src['id']
+            deps.append(d)
+        order += ss
+    return order, deps
+
+
 def merge_parts(a, src, P, bi):
     import glob
     scans, where = [], {}
@@ -361,8 +400,7 @@ def merge_parts(a, src, P, bi):
             scans.append(s)
     if not scans:
         sys.exit(f'{a.source}: no part output found in {a.merge}')
-    scans.sort(key=lambda s: s['t0'])
-    deps = bi.group(src, scans, P)
+    scans, deps = group_all(src, scans, P, bi)
     i = 0
     for d in deps:
         d['pinned'] = True
