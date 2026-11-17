@@ -22,6 +22,7 @@ TOK = os.environ.get('MOBILE_SRC_TOKEN', '').strip()
 UA = {'User-Agent': 'hhwx-radar-archive/1.0 (mobile radar viewer)'}
 GROUPS = {'base': ('REF', 'ZDR', 'CC'), 'vel': ('VEL',)}
 PRODS = ('REF', 'VEL', 'ZDR', 'CC')
+MIN_FRAMES = int(os.environ.get('MOBILE_MIN_FRAMES', '10'))   # Hunter: fewer frames is not a case
 JUNK = re.compile(r'(^|/)(\._|\.|__MACOSX)|\.(txt|md|pdf|png|jpg|gif|csv|json|xml|log|py|npy|mat)$|(^|/)(README|corrections)', re.I)
 
 
@@ -361,8 +362,13 @@ def main():
     if not scans:
         sys.exit(f'{a.source}: no scans converted ({fails} failed)')
     scans, deps = group_all(src, scans, P, bi)
-    i = 0
+    i, kept = 0, []
     for d in deps:
+        if len(d['scans']) < MIN_FRAMES:          # a stop of a few scans is not worth listing
+            print(f"  {d['id']}: only {len(d['scans'])} frames, not published", flush=True)
+            i += len(d['scans'])
+            continue
+        kept.append(d)
         d['pinned'] = True
         os.makedirs(os.path.join(a.out, 'cache', d['id']), exist_ok=True)
         for n in range(len(d['scans'])):
@@ -370,6 +376,9 @@ def main():
             for g in GROUPS:
                 os.replace(os.path.join(tmp, f'{kk}.{g}.bin.gz'), os.path.join(a.out, 'cache', d['id'], f'{n}.{g}.bin.gz'))
     assert i == len(scans)
+    deps = kept
+    if not deps:
+        sys.exit(f'{a.source}: no deployment with {MIN_FRAMES}+ frames')
     json.dump({'source': a.source, 'deployments': deps}, open(os.path.join(a.out, f'index_{a.source}.json'), 'w'))
     shutil.rmtree(tmp, ignore_errors=True)
     print(f'{a.source}: {len(scans)} scans in {len(deps)} deployments, {fails} failed, {time.time() - t_all:.0f}s', flush=True)
@@ -423,14 +432,22 @@ def merge_parts(a, src, P, bi):
     if not scans:
         sys.exit(f'{a.source}: no part output found in {a.merge}')
     scans, deps = group_all(src, scans, P, bi)
-    i = 0
+    i, kept = 0, []
     for d in deps:
+        if len(d['scans']) < MIN_FRAMES:          # a stop of a few scans is not worth listing
+            print(f"  {d['id']}: only {len(d['scans'])} frames, not published", flush=True)
+            i += len(d['scans'])
+            continue
+        kept.append(d)
         d['pinned'] = True
         os.makedirs(os.path.join(a.out, 'cache', d['id']), exist_ok=True)
         for n in range(len(d['scans'])):
             kk = scans[i]['k']; i += 1
             for g in GROUPS:
                 shutil.move(os.path.join(where[kk], f'{kk}.{g}.bin.gz'), os.path.join(a.out, 'cache', d['id'], f'{n}.{g}.bin.gz'))
+    deps = kept
+    if not deps:
+        sys.exit(f'{a.source}: no deployment with {MIN_FRAMES}+ frames')
     json.dump({'source': a.source, 'deployments': deps}, open(os.path.join(a.out, f'index_{a.source}.json'), 'w'))
     print(f'{a.source}: merged {len(scans)} scans into {len(deps)} deployments', flush=True)
 
