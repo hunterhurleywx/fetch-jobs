@@ -376,12 +376,16 @@ def group_all(src, scans, P, bi):
         scans.sort(key=lambda s: s['t0'])
         return scans, bi.group(src, scans, P)
     order, deps = [], []
-    for tag in sorted({s.get('tag') or '' for s in scans}):
-        name = src['radars'].get(tag)
-        if not name:
-            print(f'  radar tag {tag!r} not in this source, skipped', flush=True)
-            continue
-        ss = sorted((s for s in scans if (s.get('tag') or '') == tag), key=lambda s: s['t0'])
+    by_name = {}
+    for sc in scans:
+        name = src['radars'].get(sc.get('tag') or '')
+        if name:
+            by_name.setdefault(name, []).append(sc)
+    skipped = sorted({sc.get('tag') or '' for sc in scans if not src['radars'].get(sc.get('tag') or '')})
+    if skipped:
+        print(f'  radar tags not in this source, skipped: {skipped}', flush=True)
+    for name in sorted(by_name):                  # several file tags can be one truck (DOW2-ROT, DOW2_--)
+        ss = sorted(by_name[name], key=lambda s: s['t0'])
         sub = {**src, 'id': f"{src['id']}-{name.lower().replace(' ', '').replace('-', '')}", 'radar': name}
         for d in bi.group(sub, ss, P):
             d['source'] = src['id']
