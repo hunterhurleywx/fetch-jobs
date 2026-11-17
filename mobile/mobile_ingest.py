@@ -392,7 +392,7 @@ def radar_tag(nm):
     """Radar named in a DORADE sweep file name (swp.<time>.<RADAR>.<n>...), else ''."""
     m = re.match(r'swp\.\d+\.([^.]+)\.', os.path.basename(nm))
     if not m:                                   # a merged volume: <folder>/<RADAR>_v<n>[.nc]
-        m = re.search(r'([A-Za-z0-9]+)_v\d+(\.nc)?$', nm)
+        m = re.search(r'/([^/]+)_v\d+(\.nc)?$', nm)   # whole tag: DOW2-ROT, SMART-R1, UMass-XP, DOW2_--
     return m.group(1).upper() if m else ''
 
 
