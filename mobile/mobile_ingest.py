@@ -96,6 +96,10 @@ def work(name, buf, flags, outdir, k):
     rec = {'name': name, 'k': k}
     t0 = time.time()
     try:
+        if isinstance(buf, list):                 # one volume of DORADE sweep files
+            import dorade
+            buf = dorade.volume_to_cfradial(buf)
+            name = name.rstrip('/') + '.nc'
         if buf[:2] == b'\x1f\x8b':
             buf = gzip.decompress(buf)
         meta = mobcore.scan_meta(buf, name)
@@ -210,15 +214,36 @@ def main():
                     elif not rec.get('skip'):
                         fails += 1
                         print(f'  FAIL {nm}: {rec.get("err")}', flush=True)
-            for nm, buf in members(path):
-                if JUNK.search(nm) or len(buf) < 1024:
-                    continue
+            vol = {'dir': None, 'bufs': []}       # DORADE: one file per sweep, a directory per volume
+
+            def submit(nm, buf):
+                nonlocal k
                 inflight.append((pool.submit(work, nm, buf, flags, tmp, k), url, nm))
                 k += 1
-                del buf
                 drain(a.procs * 2)
                 if k % 100 == 0:
                     print(f'  {k} scans read, {len(scans)} converted, {fails} failed, {time.time() - t_all:.0f}s', flush=True)
+
+            def flush_vol():
+                if vol['bufs']:
+                    submit(vol['dir'], vol['bufs'])
+                vol['dir'], vol['bufs'] = None, []
+            for nm, buf in members(path):
+                base = os.path.basename(nm)
+                if base.startswith('swp.'):
+                    if 'RHI' in base.upper():
+                        continue
+                    d = os.path.dirname(nm)
+                    if d != vol['dir']:
+                        flush_vol()
+                        vol['dir'] = d
+                    vol['bufs'].append(buf)
+                    continue
+                if JUNK.search(nm) or len(buf) < 1024:
+                    continue
+                submit(nm, buf)
+                del buf
+            flush_vol()
             drain(0)
             os.remove(path)
     rep.close()
