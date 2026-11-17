@@ -11,13 +11,13 @@ run-length compressed when RADD.data_compress == 1).
 import datetime as dt, os, struct, tempfile
 import numpy as np
 
-NAMES = {   # DORADE field name -> CfRadial standard name used by mobcore.FIELDS
-    'reflectivity': ('DBZ', 'DZ', 'DBZH', 'ZH', 'DBZC', 'DCZ', 'DB_DBZ', 'DB_DBZ2'),
-    'velocity': ('VEL', 'VR', 'VE', 'VG', 'DB_VEL', 'VT'),
-    'differential_reflectivity': ('ZDR', 'DR', 'DB_ZDR'),
-    'cross_correlation_ratio': ('RHOHV', 'RH', 'RHO', 'DB_RHOHV'),
+NAMES = {   # CfRadial standard name -> DORADE field names, best first
+    # 2010-era dual-pol DOWs: DBZHM/VU/ZDRM/RHM (mean / unfolded); older DOWs and NOXP: DZ/DBZ, VE/VR/VEL
+    'reflectivity': ('DBZHM', 'DBZ', 'DZ', 'DBZH', 'DBZHC', 'DCZ', 'ZH', 'DBZC', 'DBZH1', 'DB_DBZ', 'DB_DBZ2'),
+    'velocity': ('VU', 'VEL', 'VE', 'VR', 'VTOT', 'V1', 'VG', 'DB_VEL', 'VT', 'VEL_F'),
+    'differential_reflectivity': ('ZDRM', 'ZDR', 'DR', 'ZDR1', 'DB_ZDR'),
+    'cross_correlation_ratio': ('RHM', 'RHOHV', 'RH', 'RHO', 'RH1', 'DB_RHOHV'),
 }
-LOOKUP = {d: std for std, ds in NAMES.items() for d in ds}
 
 
 def _blocks(buf):
@@ -96,9 +96,10 @@ def read_sweep(buf):
         raise ValueError('not a complete DORADE sweep')
     nc = len(cells)
     fields = {}
-    for pm in parms:
-        std = LOOKUP.get(pm['name'].upper())
-        if not std or std in fields:
+    byname = {pm['name'].upper(): pm for pm in parms}
+    for std, wanted in NAMES.items():
+        pm = next((byname[n] for n in wanted if n in byname), None)
+        if pm is None:
             continue
         dtype = {1: 'i1', 2: 'i2', 3: 'i4', 4: 'f4'}.get(pm['fmt'], 'i2')
         arr = np.ma.masked_all((len(rays), nc), np.float32)
