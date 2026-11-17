@@ -22,7 +22,7 @@ TOK = os.environ.get('MOBILE_SRC_TOKEN', '').strip()
 UA = {'User-Agent': 'hhwx-radar-archive/1.0 (mobile radar viewer)'}
 GROUPS = {'base': ('REF', 'ZDR', 'CC'), 'vel': ('VEL',)}
 PRODS = ('REF', 'VEL', 'ZDR', 'CC')
-MIN_FRAMES = int(os.environ.get('MOBILE_MIN_FRAMES', '10'))   # Hunter: fewer frames is not a case
+MIN_FRAMES = int(os.environ.get('MOBILE_MIN_FRAMES', '3'))    # Hunter: 1-2 frames is not a case
 JUNK = re.compile(r'(^|/)(\._|\.|__MACOSX)|\.(txt|md|pdf|png|jpg|gif|csv|json|xml|log|py|npy|mat)$|(^|/)(README|corrections)', re.I)
 
 
