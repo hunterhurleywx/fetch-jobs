@@ -64,13 +64,60 @@ def download(url, path, lanes=12, chunk=16 << 20):
     return size
 
 
+def zip_sequential(path):
+    """Read a zip front to back by its local headers, ignoring the central directory
+    (OU's 7 GB El Reno zip has 32-bit offsets that overflow, so ZipFile seeks to junk)."""
+    import struct, zlib
+    with open(path, 'rb') as f:
+        while True:
+            h = f.read(30)
+            if len(h) < 30 or h[:4] != b'PK\x03\x04':
+                return
+            flags, method = struct.unpack('<HH', h[6:10])
+            csize, usize = struct.unpack('<II', h[18:26])
+            nlen, xlen = struct.unpack('<HH', h[26:30])
+            name = f.read(nlen).decode('utf-8', 'replace')
+            extra = f.read(xlen)
+            if 0xFFFFFFFF in (csize, usize):          # zip64 sizes live in extra field 0x0001
+                p = 0
+                while p + 4 <= len(extra):
+                    tag, sz = struct.unpack('<HH', extra[p:p + 4])
+                    if tag == 1:
+                        vals, q = [], p + 4
+                        while q + 8 <= p + 4 + sz:
+                            vals.append(struct.unpack('<Q', extra[q:q + 8])[0]); q += 8
+                        if usize == 0xFFFFFFFF and vals:
+                            usize = vals.pop(0)
+                        if csize == 0xFFFFFFFF and vals:
+                            csize = vals.pop(0)
+                    p += 4 + sz
+            if flags & 8 and csize == 0:
+                raise IOError(f'{name}: streamed zip entry without sizes')
+            data = f.read(csize)
+            if flags & 8:                             # data descriptor after the data
+                sig = f.read(4)
+                f.read(12 if sig == b'PK\x07\x08' else 8)
+            if name.endswith('/'):
+                continue
+            yield name, (zlib.decompress(data, -15) if method == 8 else data)
+
+
 def members(path):
     """(name, bytes) for every file in an archive (tar any compression, zip) or the file itself."""
     if zipfile.is_zipfile(path):
-        with zipfile.ZipFile(path) as z:
-            for i in z.infolist():
-                if not i.is_dir():
-                    yield i.filename, z.read(i)
+        done = set()
+        try:
+            with zipfile.ZipFile(path) as z:
+                for i in z.infolist():
+                    if not i.is_dir():
+                        data = z.read(i)
+                        done.add(i.filename)
+                        yield i.filename, data
+        except zipfile.BadZipFile as e:
+            print(f'  zip index unusable after {len(done)} files ({e}); reading it front to back', flush=True)
+            for name, data in zip_sequential(path):
+                if name not in done:
+                    yield name, data
     elif tarfile.is_tarfile(path):
         with tarfile.open(path, 'r:*') as t:
             for m in t:
