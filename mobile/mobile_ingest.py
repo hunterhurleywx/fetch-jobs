@@ -230,6 +230,9 @@ def main():
     ap.add_argument('--out', default='out')
     ap.add_argument('--procs', type=int, default=os.cpu_count() or 4)
     ap.add_argument('--work', default='work')
+    ap.add_argument('--part', type=int, default=0, help='convert only every --of-th scan, starting at this one')
+    ap.add_argument('--of', type=int, default=1)
+    ap.add_argument('--merge', default='', help='directory of part outputs (part_*/scans.json + tmp/) to group and publish')
     a = ap.parse_args()
     if not TOK:
         sys.exit('MOBILE_SRC_TOKEN not set')
@@ -249,6 +252,8 @@ def main():
     flags = {k: src[k] for k in ('nodealias', 'azOffset', 'timeShiftMs') if src.get(k)}
     tmp = os.path.join(a.out, 'tmp')
     os.makedirs(tmp, exist_ok=True)
+    if a.merge:
+        return merge_parts(a, src, P, bi)
     os.makedirs(a.work, exist_ok=True)
     rep = open(os.path.join(a.out, 'report.jsonl'), 'w')
     scans, k, fails = [], 0, 0
@@ -284,6 +289,9 @@ def main():
 
             def submit(nm, buf):
                 nonlocal k
+                if a.of > 1 and k % a.of != a.part:     # another part's scan
+                    k += 1
+                    return
                 inflight.append((pool.submit(work, nm, buf, flags, tmp, k), url, nm))
                 k += 1
                 drain(a.procs * 2)
@@ -313,6 +321,10 @@ def main():
             drain(0)
             os.remove(path)
     rep.close()
+    if a.of > 1:                                     # a part: hand the scans to the merge job
+        json.dump(scans, open(os.path.join(a.out, 'scans.json'), 'w'))
+        print(f'{a.source} part {a.part}/{a.of}: {len(scans)} scans, {fails} failed, {time.time() - t_all:.0f}s', flush=True)
+        return
     if not scans:
         sys.exit(f'{a.source}: no scans converted ({fails} failed)')
     scans.sort(key=lambda s: s['t0'])
@@ -332,6 +344,30 @@ def main():
     for d in deps:
         print(f"  {d['id']}: {d['radar']} near {d['place']} {time.strftime('%Y-%m-%d %H:%MZ', time.gmtime(d['start'] / 1000))}"
               f" {d['nscans']} scans, {len(d['angles'])} angles, {d['products']}", flush=True)
+
+
+def merge_parts(a, src, P, bi):
+    import glob
+    scans, where = [], {}
+    for sj in sorted(glob.glob(os.path.join(a.merge, '*', 'scans.json'))):
+        d = os.path.dirname(sj)
+        for s in json.load(open(sj)):
+            where[s['k']] = os.path.join(d, 'tmp')
+            scans.append(s)
+    if not scans:
+        sys.exit(f'{a.source}: no part output found in {a.merge}')
+    scans.sort(key=lambda s: s['t0'])
+    deps = bi.group(src, scans, P)
+    i = 0
+    for d in deps:
+        d['pinned'] = True
+        os.makedirs(os.path.join(a.out, 'cache', d['id']), exist_ok=True)
+        for n in range(len(d['scans'])):
+            kk = scans[i]['k']; i += 1
+            for g in GROUPS:
+                shutil.move(os.path.join(where[kk], f'{kk}.{g}.bin.gz'), os.path.join(a.out, 'cache', d['id'], f'{n}.{g}.bin.gz'))
+    json.dump({'source': a.source, 'deployments': deps}, open(os.path.join(a.out, f'index_{a.source}.json'), 'w'))
+    print(f'{a.source}: merged {len(scans)} scans into {len(deps)} deployments', flush=True)
 
 
 if __name__ == '__main__':

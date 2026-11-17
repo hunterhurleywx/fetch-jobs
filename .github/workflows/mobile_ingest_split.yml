@@ -1,0 +1,93 @@
+# Mobile Radar Finder: one very large source (e.g. AIR El Reno 2013) split across
+# runners. Each part converts every Nth scan and stages its output in S3; the merge
+# job groups all scans into deployments, stores, pushes and publishes.
+name: mobile-ingest-split
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Remote source id'
+        required: true
+      parts:
+        description: 'Number of runners'
+        default: '8'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      list: ${{ steps.p.outputs.list }}
+    steps:
+      - id: p
+        run: echo "list=$(python3 -c 'import json,sys; print(json.dumps(list(range(int(sys.argv[1])))))' '${{ inputs.parts }}')" >> "$GITHUB_OUTPUT"
+
+  part:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        part: ${{ fromJSON(needs.plan.outputs.list) }}
+    env:
+      MOBILE_SRC_TOKEN: ${{ secrets.MOBILE_SRC_TOKEN }}
+      PYART_QUIET: '1'
+      MPLBACKEND: Agg
+    steps:
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mobile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet arm_pyart==2.2.2 netCDF4 requests "numpy<2.5"
+      - name: Convert part ${{ matrix.part }}
+        run: python -u mobile/mobile_ingest.py "${{ inputs.source }}" --part ${{ matrix.part }} --of ${{ inputs.parts }} --out out --work /mnt/work
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+      - name: Stage in S3
+        run: aws s3 sync out "s3://hhwx-mobile-radar/staging/${{ github.run_id }}/part_${{ matrix.part }}/" --only-show-errors --exclude "cache/*"
+
+  merge:
+    needs: part
+    runs-on: ubuntu-24.04
+    env:
+      MOBILE_SRC_TOKEN: ${{ secrets.MOBILE_SRC_TOKEN }}
+      PYART_QUIET: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mobile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet requests "numpy<2.5"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+      - name: Fetch parts
+        run: aws s3 sync "s3://hhwx-mobile-radar/staging/${{ github.run_id }}/" parts --only-show-errors
+      - name: Merge
+        run: python -u mobile/mobile_ingest.py "${{ inputs.source }}" --merge parts --out out
+      - name: Store, push, publish
+        run: |
+          aws s3 sync out/cache s3://hhwx-mobile-radar/cache/ --only-show-errors
+          aws s3 cp "out/index_${{ inputs.source }}.json" "s3://hhwx-mobile-radar/index/${{ inputs.source }}.json" --only-show-errors
+          python -u mobile/mobile_push.py out
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+            --data-binary "@out/index_${{ inputs.source }}.json" \
+            "https://hhwx.me/api/mobile/ingest_index/${MOBILE_SRC_TOKEN}/${{ inputs.source }}"
+          aws s3 rm "s3://hhwx-mobile-radar/staging/${{ github.run_id }}/" --recursive --only-show-errors
