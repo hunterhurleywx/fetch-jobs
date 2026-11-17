@@ -68,6 +68,23 @@ def zip_sequential(path):
     """Read a zip front to back by its local headers, ignoring the central directory
     (OU's 7 GB El Reno zip has 32-bit offsets that overflow, so ZipFile seeks to junk)."""
     import struct, zlib
+    # Sizes from the central directory (its 32-bit offsets overflow, its sizes don't):
+    # streamed entries carry no sizes in their local headers.
+    cdsize = {}
+    with open(path, 'rb') as f:
+        f.seek(0, 2); end = f.tell()
+        f.seek(max(0, end - (1 << 20))); tail = f.read()
+        i = tail.rfind(b'PK\x05\x06')
+        if i >= 0:
+            size_cd = struct.unpack('<I', tail[i + 12:i + 16])[0]
+            eocd_pos = end - len(tail) + i
+            f.seek(eocd_pos - size_cd); cd = f.read(size_cd)
+            p = 0
+            while p + 46 <= len(cd) and cd[p:p + 4] == b'PK\x01\x02':
+                csz = struct.unpack('<I', cd[p + 20:p + 24])[0]
+                nl, xl, cl = struct.unpack('<HHH', cd[p + 28:p + 34])
+                cdsize[cd[p + 46:p + 46 + nl].decode('utf-8', 'replace')] = csz
+                p += 46 + nl + xl + cl
     with open(path, 'rb') as f:
         while True:
             h = f.read(30)
@@ -92,7 +109,9 @@ def zip_sequential(path):
                             csize = vals.pop(0)
                     p += 4 + sz
             if flags & 8 and csize == 0:
-                raise IOError(f'{name}: streamed zip entry without sizes')
+                if name not in cdsize:
+                    raise IOError(f'{name}: streamed zip entry without sizes')
+                csize = cdsize[name]
             data = f.read(csize)
             if flags & 8:                             # data descriptor after the data
                 sig = f.read(4)
