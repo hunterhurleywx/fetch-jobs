@@ -128,7 +128,8 @@ def members(path):
         done = set()
         try:
             with zipfile.ZipFile(path) as z:
-                for i in z.infolist():
+                # by name: DORADE sweep names start with their time, and zips are not stored in time order
+                for i in sorted(z.infolist(), key=lambda i: i.filename):
                     if not i.is_dir():
                         data = z.read(i)
                         done.add(i.filename)
