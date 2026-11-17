@@ -304,10 +304,15 @@ def main():
                 vol['dir'], vol['bufs'] = None, []
             for nm, buf in members(path):
                 base = os.path.basename(nm)
+                if src.get('include') and not re.search(src['include'], nm):
+                    continue                          # e.g. only the DOW folders, not the NEXRAD/code in the same zip
                 if base.startswith('swp.'):
                     if 'RHI' in base.upper():
                         continue
-                    d = os.path.dirname(nm)
+                    # one volume = same folder + radar + volume number (swp.<time>.<radar>.<n>.<angle>_PPI_v<vol>);
+                    # some archives keep every sweep of the day in one folder
+                    mv = re.search(r'^swp\.\d+\.([^.]+)\..*_v(\d+)$', base)
+                    d = os.path.dirname(nm) + (f'/{mv.group(1)}_v{mv.group(2)}' if mv else '')
                     if d != vol['dir']:
                         flush_vol()
                         vol['dir'] = d
