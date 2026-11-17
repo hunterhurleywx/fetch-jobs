@@ -1,0 +1,81 @@
+# hhwx.me Radar Archive - Mobile Radar Finder: build runner-side ("remote") sources.
+# One runner per source: download, index, convert + check every scan, store in the
+# private S3 bucket, push to the hhwx.me cache, then publish the index entries
+# (the server only accepts them once every scan is cached). mobile/mobile_ingest.py.
+name: mobile-ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Comma list of remote source ids (see remote_sources.json on the server)'
+        required: true
+      publish:
+        description: 'Push to hhwx.me and publish in the finder'
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      list: ${{ steps.p.outputs.list }}
+    steps:
+      - id: p
+        run: echo "list=$(echo '${{ inputs.sources }}' | jq -R -c 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+  ingest:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        source: ${{ fromJSON(needs.plan.outputs.list) }}
+    env:
+      MOBILE_SRC_TOKEN: ${{ secrets.MOBILE_SRC_TOKEN }}
+      PYART_QUIET: '1'
+      MPLBACKEND: Agg
+    steps:
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          df -h / /mnt | tail -2
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mobile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install --quiet arm_pyart==2.2.2 netCDF4 requests "numpy<2.5"
+      - name: Build ${{ matrix.source }}
+        run: python -u mobile/mobile_ingest.py "${{ matrix.source }}" --out out --work /mnt/work
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+      - name: Store in S3
+        run: |
+          aws s3 sync out/cache s3://hhwx-mobile-radar/cache/ --only-show-errors
+          aws s3 cp "out/index_${{ matrix.source }}.json" "s3://hhwx-mobile-radar/index/${{ matrix.source }}.json" --only-show-errors
+          aws s3 cp out/report.jsonl "s3://hhwx-mobile-radar/reports/${{ github.run_id }}/${{ matrix.source }}/report.jsonl" --only-show-errors
+      - name: Push to hhwx.me and publish
+        if: ${{ inputs.publish }}
+        run: |
+          python -u mobile/mobile_push.py out
+          curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' \
+            --data-binary "@out/index_${{ matrix.source }}.json" \
+            "https://hhwx.me/api/mobile/ingest_index/${MOBILE_SRC_TOKEN}/${{ matrix.source }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-${{ matrix.source }}
+          path: out/report.jsonl
+          if-no-files-found: ignore
