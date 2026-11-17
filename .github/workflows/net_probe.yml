@@ -1,0 +1,16 @@
+# One-off network check from a GitHub runner (timing of a few ranged downloads).
+name: net-probe
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        default: 'https://cif.arrc.ou.edu/data/20170511_CFradial.zip'
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - run: |
+          for i in 1 2 3; do
+            curl -s -o /dev/null -r 0-104857599 --max-time 240 -w "try $i: %{http_code} connect %{time_connect}s total %{time_total}s %{speed_download} B/s\n" "${{ inputs.url }}" || echo "try $i: curl failed $?"
+          done
