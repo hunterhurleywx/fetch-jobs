@@ -29,7 +29,7 @@ def src_url(name):
     return f'{SRV}/src/{TOK}/' + urllib.parse.quote(name)
 
 
-def download(url, path, lanes=6, chunk=16 << 20):
+def download(url, path, lanes=12, chunk=16 << 20):
     """Parallel ranged download (one Zenodo connection runs ~1 MB/s)."""
     r = requests.head(url, headers=UA, allow_redirects=True, timeout=60)
     size = int(r.headers.get('Content-Length') or 0)
