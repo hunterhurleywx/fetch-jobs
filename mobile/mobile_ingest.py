@@ -301,8 +301,9 @@ def main():
 
             def flush_vol():
                 if vol['bufs']:
-                    submit(vol['dir'], vol['bufs'])
-                vol['dir'], vol['bufs'] = None, []
+                    vol['n'] = vol.get('n', 0) + 1
+                    submit(f"{vol['dir']}_v{vol['n']}", vol['bufs'])
+                vol['dir'], vol['bufs'], vol['t'], vol['a'] = None, [], None, None
             for nm, buf in members(path):
                 base = os.path.basename(nm)
                 if src.get('include') and not re.search(src['include'], nm):
@@ -319,14 +320,31 @@ def main():
                 if base.startswith('swp.'):
                     if 'RHI' in base.upper():
                         continue
-                    # one volume = same folder + radar + volume number (swp.<time>.<radar>.<n>.<angle>_PPI_v<vol>);
-                    # some archives keep every sweep of the day in one folder
-                    mv = re.search(r'^swp\.\d+\.([^.]+)\..*_v(\d+)$', base)
-                    d = os.path.dirname(nm) + (f'/{mv.group(1)}_v{mv.group(2)}' if mv else '')
-                    if d != vol['dir']:
+                    # One volume = consecutive sweeps of one radar in one folder. Some archives keep a
+                    # whole day of sweeps in one folder (and number every sweep as its own "volume"),
+                    # so a new volume also starts when time moves on but the elevation drops back down,
+                    # or after a 5-minute gap. (VORTEX2 NOXP folders hold one volume in random order:
+                    # there time and elevation never move in opposite directions, so no split.)
+                    mt = re.match(r'swp\.1?(\d{12})\.([^.]+)\.\d+\.(-?\d+(?:\.\d+)?)_', base)
+                    d = os.path.dirname(nm) + '/' + (mt.group(2) if mt else '')
+                    tt = ang = None
+                    if mt:
+                        from datetime import datetime as _dt
+                        try:
+                            tt = _dt.strptime(mt.group(1), '%y%m%d%H%M%S').timestamp()
+                        except ValueError:
+                            tt = None
+                        ang = float(mt.group(3))
+                    new = d != vol['dir']
+                    if not new and tt is not None and vol.get('t') is not None:
+                        if tt - vol['t'] > 300 or (tt > vol['t'] and ang is not None and vol.get('a') is not None and ang <= vol['a']):
+                            new = True
+                    if new:
                         flush_vol()
                         vol['dir'] = d
                     vol['bufs'].append(buf)
+                    if tt is not None:
+                        vol['t'], vol['a'] = tt, ang
                     continue
                 if JUNK.search(nm) or len(buf) < 1024:
                     continue
