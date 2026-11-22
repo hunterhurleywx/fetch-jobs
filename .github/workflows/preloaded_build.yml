@@ -1,0 +1,50 @@
+# hhwx.me Radar Archive > Preloaded Data: build WSR-88D lowest-tilt cases on free runners,
+# one runner per case (preloaded/preloaded_runner.py), push the finder scans to hhwx.me
+# (mobile/mobile_push.py, token-gated ingest) and keep each case's index entry as an
+# artifact; the main session installs those (install_preloaded_json.py on the server).
+name: preloaded-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: 'JSON array of case objects (id, site, w0, w1, place, state, note, tor)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        case: ${{ fromJSON(inputs.cases) }}
+    env:
+      MOBILE_SRC_TOKEN: ${{ secrets.MOBILE_SRC_TOKEN }}
+      PYART_QUIET: '1'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            preloaded
+            mobile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install --quiet arm_pyart==2.2.2 netCDF4 requests "numpy<2.5"
+      - name: Build ${{ matrix.case.id }}
+        env:
+          CASE: ${{ toJSON(matrix.case) }}
+        run: python -u preloaded/preloaded_runner.py
+      - name: Push scans to hhwx.me
+        run: python -u mobile/mobile_push.py out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: case-${{ matrix.case.id }}
+          path: out/case.json
