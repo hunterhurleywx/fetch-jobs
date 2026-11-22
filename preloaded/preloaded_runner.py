@@ -12,6 +12,7 @@ the main session installs out/case.json into the finder index (install_preloaded
 mobcore.py comes from the server (token-gated /api/mobile/src), like mobile_shard.py.
 """
 import datetime as dt, glob, json, os, re, shutil, subprocess, sys, time, urllib.request
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRV = os.environ.get('MOBILE_SRV', 'https://hhwx.me/api/mobile')
@@ -43,7 +44,74 @@ def list_keys(site, w0, w1):
     return out
 
 
+L3 = 'https://unidata-nexrad-level3.s3.amazonaws.com'
+GCS = 'https://storage.googleapis.com/gcp-public-data-nexrad-l3'
+AWS_L3_FROM = 1585612800000                       # 2020-03-31
+
+
+def nws_products(site, w0, w1):
+    """NWS's own unfolded lowest-tilt velocity (Level III N0G, else N0U) for every cut in the window,
+    keyed by the cut's start (NWS stamps every low cut, SAILS rescans included, with the start of its surveillance
+    half -- the same time l2_to_rhbins.py stores): {epoch s: {az, vel, gate_km}}.
+    2020-03-31 on: AWS Level III keys; before: Google's daily Level III tarball streamed here (never stored)."""
+    from metpy.io import Level3File
+    os.makedirs('l3', exist_ok=True)
+    files = []
+    if w0 >= AWS_L3_FROM:
+        t = dt.datetime.fromtimestamp((w0 - 15 * 60000) / 1000, dt.timezone.utc).replace(minute=0, second=0)
+        end = dt.datetime.fromtimestamp(w1 / 1000, dt.timezone.utc)
+        while t <= end:
+            for prod in ('N0G',):
+                x = urllib.request.urlopen(f'{L3}/?list-type=2&prefix={site[1:]}_{prod}_{t:%Y_%m_%d_%H}', timeout=60).read().decode()
+                for k in re.findall(r'<Key>([^<]+)</Key>', x):
+                    p = os.path.join('l3', k); urllib.request.urlretrieve(f'{L3}/{k}', p); files.append(p)
+            t += dt.timedelta(hours=1)
+    else:
+        import tarfile
+        d0 = dt.datetime.fromtimestamp((w0 - 15 * 60000) / 1000, dt.timezone.utc).date()
+        d1 = dt.datetime.fromtimestamp(w1 / 1000, dt.timezone.utc).date()
+        for k in range((d1 - d0).days + 1):
+            day = d0 + dt.timedelta(days=k)
+            q = json.load(urllib.request.urlopen(f'https://storage.googleapis.com/storage/v1/b/gcp-public-data-nexrad-l3/o?prefix={day:%Y/%m/%d}/{site}/&maxResults=5', timeout=60))
+            names = [x['name'] for x in q.get('items', []) if x['name'].endswith(('.tar.gz', '.tar.Z', '.tgz'))]
+            if not names:
+                continue
+            got = {'N0G': [], 'N0U': []}
+            pr = subprocess.Popen(['bash', '-c', f'curl -s --fail "{GCS}/{names[0]}" | gzip -dc'], stdout=subprocess.PIPE)
+            with tarfile.open(fileobj=pr.stdout, mode='r|') as tf:
+                for m in tf:
+                    b = os.path.basename(m.name)
+                    for prod in got:
+                        if m.isfile() and f'_{prod}' in b:
+                            p = os.path.join('l3', b); open(p, 'wb').write(tf.extractfile(m).read()); got[prod].append(p)
+            pr.wait()
+            files += got['N0G'] or got['N0U']            # super-res N0G when the day has it, else 1-degree N0U
+    vols = {}
+    for p in files:
+        try:
+            f = Level3File(p)
+            blk = f.sym_block[0][0]
+            a0 = np.asarray(blk['start_az'], float); a1 = np.asarray(blk['end_az'], float)
+            az = (a0 + ((a1 - a0) % 360) / 2) % 360
+            vel = np.asarray(f.map_data(blk['data']), float)
+            vt = f.metadata['vol_time'].replace(tzinfo=dt.timezone.utc).timestamp()
+            vols.setdefault(round(vt), {'az': az, 'vel': vel, 'gate_km': 0.25})
+        except Exception as e:
+            print('  skip L3', os.path.basename(p), type(e).__name__, e, flush=True)
+    shutil.rmtree('l3', ignore_errors=True)
+    print(f'  NWS velocity products: {len(vols)} cuts', flush=True)
+    return vols
+
+
 cid = c['id']
+NWS = nws_products(c['site'], c['w0'], c['w1'])
+
+
+def nws_for(t):
+    best = min(NWS, key=lambda v: abs(v - t), default=None)
+    return NWS[best] if best is not None and abs(best - t) <= 3 else None
+
+
 keys = list_keys(c['site'], c['w0'], c['w1'])
 print(f'{cid}: {len(keys)} Level II volumes', flush=True)
 if not keys:
@@ -59,7 +127,7 @@ for k in keys:
             print('retry', k, e, flush=True); time.sleep(5 * (attempt + 1))
     if os.path.exists(p):
         paths.append(p)
-n = l2_to_rhbins.convert(paths, bins, 150.0, log=lambda *a: print(*a, flush=True))
+n = l2_to_rhbins.convert(paths, bins, 150.0, log=lambda *a: print(*a, flush=True), nws=nws_for)
 shutil.rmtree('raw', ignore_errors=True)
 for f in glob.glob(os.path.join(bins, '*.bin')):          # frames inside the window only
     ts = dt.datetime.strptime(os.path.basename(f)[:15], '%Y%m%d-%H%M%S').replace(tzinfo=dt.timezone.utc).timestamp() * 1000

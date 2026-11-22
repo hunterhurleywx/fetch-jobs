@@ -38,7 +38,12 @@ def _has(r, sw, key):
     return f in r.fields and np.ma.count(r.fields[f]['data'][sw]) > 0
 
 
-def convert(paths, out_dir, crop_km=150.0, log=print):
+def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
+    """nws (optional): callable(cut_start_epoch_s) -> NWS's lowest-tilt velocity product for that cut or None,
+    {'az': ray centre azimuths (deg), 'vel': (rays x bins) m/s with NaN, 'gate_km': bin size}. NWS stamps each
+    low cut (SAILS rescans included) with the start of its SURVEILLANCE half, so that is the key. It is resampled
+    onto the Doppler half's beams as '-N.bin' (u8 = round(v + 128), 1 m/s steps): NWS's own unfolding decision,
+    used per gate by rh_mob_case.py."""
     os.makedirs(out_dir, exist_ok=True)
     n = 0
     for f in paths:
@@ -95,6 +100,19 @@ def convert(paths, out_dir, crop_km=150.0, log=print):
                 files['D'] = (saz, t_cs, grid(r.fields['differential_reflectivity']['data'][ssw], nr, 16.0, 128.0))
                 files['C'] = (saz, t_cs, grid(r.fields['cross_correlation_ratio']['data'][ssw], nr, 200.0, 0.0))
                 name_t = t_cs
+            P = nws(name_t) if nws else None
+            if P is not None:                          # NWS's unfolded velocity for this very cut, on this cut's beams
+                pa = np.asarray(P['az'], float); o = np.argsort(pa)
+                d = np.abs(((az[:, None] - pa[o][None, :]) + 180) % 360 - 180)
+                rows = np.asarray(P['vel'], float)[o][np.argmin(d, axis=1)]
+                step = max(1, int(round(gw / 1000.0 / P['gate_km'])))
+                ng = (pad + r.fields['velocity']['data'][sw].shape[1])
+                nv = np.full((rays, ng), np.nan)
+                src = rows[:, ::step]                      # NWS bin j centred at (j + 0.5) * gate, same as our padded gates
+                m = min(ng, src.shape[1]); nv[:, :m] = src[:, :m]
+                gN = np.zeros((rays, ng), np.uint8); ok = np.isfinite(nv)
+                gN[ok] = np.clip(np.round(nv[ok] + 128.0), 1, 255).astype(np.uint8)
+                files['N'] = (az, t_cd, gN[:, :keep])
             name = dt.datetime.fromtimestamp(name_t, dt.timezone.utc).strftime('%Y%m%d-%H%M%S') + f'-E{round(float(fa[i]), 1)}'
             for k, (kaz, kt, g) in files.items():
                 _write(os.path.join(out_dir, f'{name}-{k}.bin'), len(kaz), g.shape[1], kt, lat, lon, el, gw / 1000.0, info, kaz, g)

@@ -92,6 +92,10 @@ for zf in sorted(glob.glob(os.path.join(folder, '*-Z.bin'))):
     V = load(vf) if os.path.exists(vf) else None
     if V is not None and (V['t'] != Z['t'] or V['rays'] != Z['rays'] or V['gates'] != Z['gates']):
         V = None
+    nf = zf[:-6] + '-N.bin'                      # NWS's own unfolded velocity for this cut (Preloaded Data)
+    Z['nws'] = load(nf) if os.path.exists(nf) else None
+    if Z['nws'] is not None and (Z['nws']['rays'] != Z['rays'] or Z['nws']['gates'] != Z['gates']):
+        Z['nws'] = None
     Z['extra'] = {}                              # optional (Preloaded Data / l2_to_rhbins.py): products from the
     for suf, prod in (('-R.bin', 'REF'), ('-D.bin', 'ZDR'), ('-C.bin', 'CC')):   # surveillance half, each on its
         xf = zf[:-6] + suf                                                          # OWN beams and with its own time
@@ -127,6 +131,35 @@ print(f"{CASE['id']}: echo motion u {REF_UV[0]:.1f} v {REF_UV[1]:.1f} m/s from {
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rh_unfold
 UNF = rh_unfold.unfold_loop(items, GHZ, REF_UV)
+# NWS-guided folds (Preloaded Data, Hunter 2026-11-22): keep the RAW Level II value at every gate and add the
+# whole number of 2*Nyquist that lands nearest NWS's own unfolded velocity (RPG dealiasing, Level III N0G/N0U)
+# for that same cut. Our loop unfolding only fills gates NWS has no value for. A frame whose NWS product does not
+# line up with the raw data (wrong cut matched) keeps our unfolding.
+n_nws = n_ours = n_flip = 0
+for k, ((Z, V), u) in enumerate(zip(items, UNF)):
+    N = Z.get('nws')
+    if N is None or V is None or u is None:
+        continue
+    va = V['info']['prf'] * (299792458.0 / (GHZ * 1e9)) / 4.0
+    raw = np.ma.masked_equal(V['u8'], 0).astype(np.float64); raw = ((raw - 128.0) / 2.0).filled(np.nan)
+    ref = np.ma.masked_equal(N['u8'], 0).astype(np.float64); ref = (ref - 128.0).filled(np.nan)
+    both = np.isfinite(raw) & np.isfinite(ref)
+    if both.sum() < 500:
+        continue
+    q = (ref[both] - raw[both]) / (2 * va)
+    off = np.abs(q - np.round(q))                # NWS = raw + whole folds (+-1 m/s quantisation) when the cut matches
+    if np.mean(off > 0.15) > 0.10:
+        print(f'  frame {k}: NWS product does not match this cut ({100 * np.mean(off > 0.15):.0f}% inconsistent) -- own unfolding kept')
+        continue
+    out = u.filled(np.nan).astype(np.float64)
+    kk = np.round((ref - raw) / (2 * va))
+    new = raw + kk * 2 * va
+    n_flip += int(np.sum(both & np.isfinite(out) & (np.abs(new - out) > va)))
+    out[both] = new[both]
+    n_nws += int(both.sum()); n_ours += int(np.sum(np.isfinite(out) & ~both))
+    UNF[k] = np.ma.masked_invalid(out)
+if n_nws:
+    print(f'  NWS folds: {n_nws} gates from NWS, {n_ours} from our unfolding; {n_flip} gates changed fold vs ours')
 FL = [f for f in rh_unfold.flicker(items, UNF, REF_UV, GHZ) if f is not None]
 worst = max(FL) if FL else 0.0
 print(f"  flicker: worst frame pair {100 * worst:.2f}% of gates jump > 1.5 Nyquist (limit {100 * rh_unfold.FLICKER_MAX:.0f}%), mean {100 * (sum(FL) / len(FL) if FL else 0):.2f}%")
