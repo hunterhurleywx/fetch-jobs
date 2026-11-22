@@ -67,7 +67,8 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
         if amin >= 0.8:
             continue
         base = dt.datetime.strptime(r.time['units'].split('since ')[1].replace('Z', ''), '%Y-%m-%dT%H:%M:%S')
-        low = [i for i, a in enumerate(fa) if abs(a - amin) <= 0.05]
+        # legacy (pre-2008 super-res) volumes label the pair of halves 0.5 / 0.4: one tilt, so allow 0.15
+        low = [i for i, a in enumerate(fa) if abs(a - amin) <= 0.15]
         for i in low:
             sw = r.get_slice(i)
             if not _has(r, sw, 'VEL'):
@@ -79,7 +80,7 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
                            if _has(r, r.get_slice(j), 'REF') and not _has(r, r.get_slice(j), 'VEL')), None)
             az = np.asarray(r.azimuth['data'][sw], float)
             rays = len(az)
-            el = round(float(fa[i]), 1)        # the cut's nominal angle: measured elevations wobble (0.48/0.53) and would split one loop into two "tilts"
+            el = round(float(fa[cs] if cs is not None else fa[i]), 1)        # the cut's nominal angle: measured elevations wobble (0.48/0.53) and would split one loop into two "tilts"
             t_of = lambda swx: (base + dt.timedelta(seconds=float(np.min(r.time['data'][swx])))).replace(tzinfo=dt.timezone.utc).timestamp()
             t_cd = t_of(sw)                                    # Doppler half: velocity was measured from here
             nyq = float(np.median(nyq_all[sw]))
@@ -95,7 +96,12 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
 
             info = {'wf': 'wsr88d', 'prf': 4.0 * nyq / LAM, 'nyquist': nyq, 'src': os.path.basename(f)}
             # Z + V: the Doppler half on its own beams (Z here is only the unfolding partner of V)
-            files = {'Z': (az, t_cd, grid(r.fields['reflectivity']['data'][sw], rays, 2.0, 64.0)),
+            zsrc = r.fields['reflectivity']['data'][sw]
+            if not _has(r, sw, 'REF') and cs is not None:   # legacy Doppler halves carry no REF: the surveillance half's, nearest beam
+                saz0 = np.asarray(r.azimuth['data'][r.get_slice(cs)], float)
+                k = np.argmin(np.abs(((az[:, None] - saz0[None, :]) + 180) % 360 - 180), axis=1)
+                zsrc = r.fields['reflectivity']['data'][r.get_slice(cs)][k]
+            files = {'Z': (az, t_cd, grid(zsrc, rays, 2.0, 64.0)),
                      'V': (az, t_cd, grid(r.fields['velocity']['data'][sw], rays, 2.0, 128.0))}
             name_t = t_cd
             if cs is not None:
@@ -125,7 +131,7 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
                 gN = np.zeros((rays, ng), np.uint8); ok = np.isfinite(nv)
                 gN[ok] = np.clip(np.round(nv[ok] + 128.0), 1, 255).astype(np.uint8)
                 files['N'] = (az, t_cd, gN[:, :keep])
-            name = dt.datetime.fromtimestamp(name_t, dt.timezone.utc).strftime('%Y%m%d-%H%M%S') + f'-E{round(float(fa[i]), 1)}'
+            name = dt.datetime.fromtimestamp(name_t, dt.timezone.utc).strftime('%Y%m%d-%H%M%S') + f'-E{el}'
             for k, (kaz, kt, g) in files.items():
                 _write(os.path.join(out_dir, f'{name}-{k}.bin'), len(kaz), g.shape[1], kt, lat, lon, el, gw / 1000.0, info, kaz, g)
             n += 1

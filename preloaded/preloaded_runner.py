@@ -99,6 +99,10 @@ def nws_products(site, w0, w1):
             vel = np.asarray(f.map_data(blk['data']), float)
             vt = f.metadata['vol_time'].replace(tzinfo=dt.timezone.utc).timestamp()
             gk = 1.0 if f.header.code == 27 else 0.25           # N0V (code 27) 1 km bins; N0U (99) / N0G (154) 0.25 km
+            if f.header.code == 27:      # old 16-level N0V: each value is a bin EDGE in knots -> bin middle in m/s
+                mid = {-64: -64, -50: -57, -36: -43, -26: -31, -20: -23, -10: -15, -1: -5.5,
+                       0: 5, 10: 15, 20: 23, 26: 31, 36: 43, 50: 57, 64: 64}
+                vel = np.vectorize(lambda x: mid.get(int(x), np.nan) * 0.514444 if np.isfinite(x) else np.nan)(vel)
             vols.setdefault(round(vt), {'az': az, 'vel': vel, 'gate_km': gk})
         except Exception as e:
             print('  skip L3', os.path.basename(p), type(e).__name__, e, flush=True)
