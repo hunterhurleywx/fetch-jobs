@@ -1,0 +1,45 @@
+# hhwx.me Radar Archive - Mobile Radar Data: restore deployments' scans to the hhwx.me cache
+# from the private S3 bucket, byte for byte (the files mobile-ingest / mobile-convert stored
+# when they were built). Nothing is downloaded from the source or re-converted.
+name: mobile-restore
+
+on:
+  workflow_dispatch:
+    inputs:
+      deps:
+        description: 'Comma list of deployment ids (cache/<id>/ in s3://hhwx-mobile-radar)'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      MOBILE_SRC_TOKEN: ${{ secrets.MOBILE_SRC_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mobile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet requests
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::420259808285:role/hhwx-github-launcher
+          aws-region: us-east-1
+      - name: Fetch from S3
+        env:
+          DEPS: ${{ inputs.deps }}
+        run: |
+          for d in $(echo "$DEPS" | tr ',' ' '); do
+            case "$d" in *[!a-z0-9-]*|'') echo "bad id $d"; exit 1;; esac
+            aws s3 sync "s3://hhwx-mobile-radar/cache/$d/" "out/cache/$d/" --only-show-errors
+            echo "$d: $(ls "out/cache/$d" 2>/dev/null | wc -l) files"
+          done
+      - name: Push to hhwx.me
+        run: python -u mobile/mobile_push.py out
