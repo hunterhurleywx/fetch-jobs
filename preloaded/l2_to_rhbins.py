@@ -74,6 +74,9 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
                 continue
             # the surveillance cut that goes with this Doppler cut: the nearest earlier low sweep with ZDR
             cs = next((j for j in sorted((j for j in low if j < i), reverse=True) if _has(r, r.get_slice(j), 'ZDR')), None)
+            if cs is None:                     # before dual-pol (2011-13): the surveillance half has REF only (no VEL)
+                cs = next((j for j in sorted((j for j in low if j < i), reverse=True)
+                           if _has(r, r.get_slice(j), 'REF') and not _has(r, r.get_slice(j), 'VEL')), None)
             az = np.asarray(r.azimuth['data'][sw], float)
             rays = len(az)
             el = round(float(fa[i]), 1)        # the cut's nominal angle: measured elevations wobble (0.48/0.53) and would split one loop into two "tilts"
@@ -101,8 +104,10 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
                 ssw = r.get_slice(cs)
                 saz = np.asarray(r.azimuth['data'][ssw], float); t_cs = t_of(ssw); nr = len(saz)
                 files['R'] = (saz, t_cs, grid(r.fields['reflectivity']['data'][ssw], nr, 2.0, 64.0))
-                files['D'] = (saz, t_cs, grid(r.fields['differential_reflectivity']['data'][ssw], nr, 16.0, 128.0))
-                files['C'] = (saz, t_cs, grid(r.fields['cross_correlation_ratio']['data'][ssw], nr, 200.0, 0.0))
+                if _has(r, ssw, 'ZDR'):
+                    files['D'] = (saz, t_cs, grid(r.fields['differential_reflectivity']['data'][ssw], nr, 16.0, 128.0))
+                if _has(r, ssw, 'CC'):
+                    files['C'] = (saz, t_cs, grid(r.fields['cross_correlation_ratio']['data'][ssw], nr, 200.0, 0.0))
                 name_t = t_cs
             P = nws(name_t) if nws else None
             if P is not None:                          # NWS's unfolded velocity for this very cut, on this cut's beams
@@ -113,6 +118,9 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
                 ng = (pad + r.fields['velocity']['data'][sw].shape[1])
                 nv = np.full((rays, ng), np.nan)
                 src = rows[:, ::step]                      # NWS bin j centred at (j + 0.5) * gate, same as our padded gates
+                rep = int(round(P['gate_km'] / (gw / 1000.0)))
+                if rep > 1:                                # coarser NWS bins (old 1 km N0V): each covers rep of our gates
+                    src = np.repeat(rows, rep, axis=1)
                 m = min(ng, src.shape[1]); nv[:, :m] = src[:, :m]
                 gN = np.zeros((rays, ng), np.uint8); ok = np.isfinite(nv)
                 gN[ok] = np.clip(np.round(nv[ok] + 128.0), 1, 255).astype(np.uint8)

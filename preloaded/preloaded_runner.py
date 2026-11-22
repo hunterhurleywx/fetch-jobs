@@ -79,7 +79,7 @@ def nws_products(site, w0, w1):
             names = [x['name'] for x in q.get('items', []) if x['name'].endswith(('.tar.gz', '.tar.Z', '.tgz'))]
             if not names:
                 continue
-            got = {'N0G': [], 'N0U': []}
+            got = {'N0G': [], 'N0U': [], 'N0V': []}
             pr = subprocess.Popen(['bash', '-c', f'curl -s --fail "{GCS}/{names[0]}" | gzip -dc'], stdout=subprocess.PIPE)
             with tarfile.open(fileobj=pr.stdout, mode='r|') as tf:
                 for m in tf:
@@ -88,7 +88,7 @@ def nws_products(site, w0, w1):
                         if m.isfile() and f'_{prod}' in b:
                             p = os.path.join('l3', b); open(p, 'wb').write(tf.extractfile(m).read()); got[prod].append(p)
             pr.wait()
-            files += got['N0G'] or got['N0U']            # super-res N0G when the day has it, else 1-degree N0U
+            files += got['N0G'] or got['N0U'] or got['N0V']   # super-res N0G when the day has it, else 1-degree N0U, else old N0V (1 km)
     vols = {}
     for p in files:
         try:
@@ -98,7 +98,8 @@ def nws_products(site, w0, w1):
             az = (a0 + ((a1 - a0) % 360) / 2) % 360
             vel = np.asarray(f.map_data(blk['data']), float)
             vt = f.metadata['vol_time'].replace(tzinfo=dt.timezone.utc).timestamp()
-            vols.setdefault(round(vt), {'az': az, 'vel': vel, 'gate_km': 0.25})
+            gk = 1.0 if f.header.code == 27 else 0.25           # N0V (code 27) 1 km bins; N0U (99) / N0G (154) 0.25 km
+            vols.setdefault(round(vt), {'az': az, 'vel': vel, 'gate_km': gk})
         except Exception as e:
             print('  skip L3', os.path.basename(p), type(e).__name__, e, flush=True)
     shutil.rmtree('l3', ignore_errors=True)
