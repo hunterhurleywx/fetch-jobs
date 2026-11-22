@@ -59,6 +59,10 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
         keep = int(crop_km * 1000 // gw)
         nyq_all = r.instrument_parameters['nyquist_velocity']['data']
         fa = np.asarray(r.fixed_angle['data'], float)
+        # some volumes have no VCP message (e.g. KCLX 2020-04-13 10:10Z): Py-ART then reports 0.0 as the fixed angle of
+        # sweeps of every height -> use that sweep's own measured elevation (median), to 0.1 deg, instead
+        for k in np.where(~np.isfinite(fa) | (fa < 0.1))[0]:
+            fa[k] = round(float(np.median(r.elevation['data'][r.get_slice(k)])), 1)
         amin = float(fa.min())
         if amin >= 0.8:
             continue
