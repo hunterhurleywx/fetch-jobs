@@ -61,10 +61,13 @@ def nws_products(site, w0, w1):
         t = dt.datetime.fromtimestamp((w0 - 15 * 60000) / 1000, dt.timezone.utc).replace(minute=0, second=0)
         end = dt.datetime.fromtimestamp(w1 / 1000, dt.timezone.utc)
         while t <= end:
-            for prod in ('N0G',):
+            for prod in ('N0G', 'N0U'):          # super-res N0G when the archive has it (not 2020-21), else 1-degree N0U
                 x = urllib.request.urlopen(f'{L3}/?list-type=2&prefix={site[1:]}_{prod}_{t:%Y_%m_%d_%H}', timeout=60).read().decode()
-                for k in re.findall(r'<Key>([^<]+)</Key>', x):
+                ks = re.findall(r'<Key>([^<]+)</Key>', x)
+                for k in ks:
                     p = os.path.join('l3', k); urllib.request.urlretrieve(f'{L3}/{k}', p); files.append(p)
+                if ks:
+                    break
             t += dt.timedelta(hours=1)
     else:
         import tarfile
