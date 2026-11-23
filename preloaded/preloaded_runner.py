@@ -135,7 +135,8 @@ for k in keys:
             print('retry', k, e, flush=True); time.sleep(5 * (attempt + 1))
     if os.path.exists(p):
         paths.append(p)
-n = l2_to_rhbins.convert(paths, bins, 150.0, log=lambda *a: print(*a, flush=True), nws=nws_for)
+n = l2_to_rhbins.convert(paths, bins, 150.0, log=lambda *a: print(*a, flush=True), nws=nws_for,
+                        site=(c['lat'], c['lon']) if c.get('lat') is not None else None)
 shutil.rmtree('raw', ignore_errors=True)
 for f in glob.glob(os.path.join(bins, '*.bin')):          # frames inside the window only
     ts = dt.datetime.strptime(os.path.basename(f)[:15], '%Y%m%d-%H%M%S').replace(tzinfo=dt.timezone.utc).timestamp() * 1000

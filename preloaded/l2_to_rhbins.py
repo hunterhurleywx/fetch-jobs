@@ -38,7 +38,7 @@ def _has(r, sw, key):
     return f in r.fields and np.ma.count(r.fields[f]['data'][sw]) > 0
 
 
-def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
+def convert(paths, out_dir, crop_km=150.0, log=print, nws=None, site=None):
     """nws (optional): callable(cut_start_epoch_s) -> NWS's lowest-tilt velocity product for that cut or None,
     {'az': ray centre azimuths (deg), 'vel': (rays x bins) m/s with NaN, 'gate_km': bin size}. NWS stamps each
     low cut (SAILS rescans included) with the start of its SURVEILLANCE half, so that is the key. It is resampled
@@ -53,6 +53,8 @@ def convert(paths, out_dir, crop_km=150.0, log=print, nws=None):
             log(f'  skip {os.path.basename(f)}: {type(e).__name__}: {e}')
             continue
         lat = float(r.latitude['data'][0]); lon = float(r.longitude['data'][0])
+        if site and abs(lat) < 0.01 and abs(lon) < 0.01:   # legacy (pre-2008) files carry no site location: the radar's known one
+            lat, lon = float(site[0]), float(site[1])
         rng = np.asarray(r.range['data'], float)
         gw = float(rng[1] - rng[0])
         pad = int(round((rng[0] - gw / 2) / gw))
