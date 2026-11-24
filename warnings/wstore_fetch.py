@@ -6,7 +6,7 @@ the warned counties before that), one file per month: IEM geojson/sbw.geojson?st
 ISSUANCE polygon (status NEW) with its tags and the event-lifetime maxima. Kept: what the Finder draws / filters /
 shows, coordinates rounded to 0.001 deg (~100 m). Out: out/wstore/YYYY-MM.json (FeatureCollection).
 
-usage: wstore_fetch.py FIRST_YEAR LAST_YEAR       (months after the current one are skipped)
+usage: wstore_fetch.py FIRST_YEAR LAST_YEAR [MONTH]   (months after the current one are skipped; MONTH: just that one)
 """
 import datetime as dt, json, os, sys, time, urllib.request
 
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     now = dt.datetime.now(dt.timezone.utc)
     total = 0
     for y in range(y0, y1 + 1):
-        for m in range(1, 13):
+        for m in ([int(sys.argv[3])] if len(sys.argv) > 3 else range(1, 13)):
             if (y, m) > (now.year, now.month):
                 break
             n = month(y, m); total += n
