@@ -1,0 +1,56 @@
+# hhwx.me Radar Archive > Warning Finder: build the local warnings store and the statement-upgrade tables on
+# free runners (warnings/), politely: at most 3 jobs talk to IEM at once, each pausing between requests.
+#   mode=store     jobs = ["1991-2004", ...]          -> artifact wstore-<range>   (out/wstore/YYYY-MM.json)
+#   mode=upgrades  jobs = ["2012-01-01:2012-06-30", ...] -> artifact wfupg-<range> (out/wf_upg/YYYY-MM-DD.json)
+# The main session downloads the artifacts and installs them on hhwx.me.
+name: warnings-store
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'store | upgrades'
+        required: true
+        default: 'store'
+      jobs:
+        description: 'JSON array: year ranges "1991-2004" (store) or day ranges "2012-01-01:2012-06-30" (upgrades)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        job: ${{ fromJSON(inputs.jobs) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: warnings
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: echo "NAME=$(echo '${{ matrix.job }}' | tr ':' '_')" >> "$GITHUB_ENV"
+      - name: Build ${{ matrix.job }}
+        env:
+          JOB: ${{ matrix.job }}
+          MODE: ${{ inputs.mode }}
+          WF_UPG_OUT: out/wf_upg
+          WF_PAUSE: '0.8'
+          WSTORE_OUT: out/wstore
+        run: |
+          if [ "$MODE" = "store" ]; then
+            python -u warnings/wstore_fetch.py "${JOB%-*}" "${JOB#*-}"
+          else
+            python -u warnings/wf_upgrades.py --range "${JOB%:*}" "${JOB#*:}"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()                       # a job that runs out of time still hands over what it built
+        with:
+          name: ${{ inputs.mode }}-${{ env.NAME }}
+          path: out/

@@ -52,4 +52,5 @@ cache/
 !/mobile/
 # hhwx.me Radar Archive > Preloaded Data (WSR-88D lowest-tilt cases built on runners)
 !/preloaded/
+!/warnings/
 /preloaded/__pycache__/
