@@ -20,6 +20,32 @@ PAUSE = float(os.environ.get('OBS_PAUSE', 0.5))
 WFOS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wfos.txt')).read().split()
 VTEC = re.compile(r'/O\.(NEW|CON|EXT|EXA|EXB|COR|UPG)\.K?([A-Z]{3,4})\.(TO|SV|FF)\.W\.(\d{4})\.(\d{6}T\d{4}Z)-')
 TAG = re.compile(r'(TORNADO|HAIL THREAT|WIND THREAT|FLASH FLOOD)\.\.\.(OBSERVED|RADAR INDICATED)')
+# before the tag lines (national 2021; parts of the Central Region from 2012): the SOURCE line (~2014-2021), else the
+# opening "AT 651 PM CDT...NATIONAL WEATHER SERVICE RADAR INDICATED..." / "...STORM SPOTTERS REPORTED A TORNADO" sentence
+SOURCE = re.compile(r'SOURCE\.\.\.([^\n]*(?:\n[ \t]+[^\n*]+)*)')
+OPEN = re.compile(r'\bAT \d{1,4} (?:AM|PM) [A-Z]{3}\b\.*(.{0,260}?)(?:\.\s|\.\.\.\s*$|\n\s*\n)', re.S | re.M)
+HUMAN = re.compile(r'SPOTTER|LAW ENFORCEMENT|POLICE|SHERIFF|PUBLIC|MEDIA|EMERGENCY MANAGE|AMATEUR RADIO|HAM RADIO|CHASER|'
+                   r'FIRE (?:DEPARTMENT|DEPT|RESCUE)|OBSERVER|REPORTED|OBSERVED|CONFIRMED|SIGHTED|EYEWITNESS|DAMAGE SURVEY|'
+                   r'GAUGE|STREAM ?GAUGE|COCORAHS|911|DISPATCH')
+RADAR = re.compile(r'RADAR INDICATED|DOPPLER RADAR|RADAR (?:DETECTED|SHOWED|WAS TRACKING|CONTINUED|HAS INDICATED)|'
+                   r'WEATHER SERVICE (?:RADAR|METEOROLOGISTS)|SATELLITE|RAIN GAUGE ESTIMATE')
+
+
+def human_or_radar(up):
+    """1 observed, 0 radar indicated, None unknown -- from the SOURCE line, else the opening sentence"""
+    m = SOURCE.search(up)
+    txt = m.group(1) if m else None
+    if txt is None:
+        m = OPEN.search(up)
+        txt = m.group(1) if m else None
+    if not txt:
+        return None
+    txt = ' '.join(txt.split())
+    if HUMAN.search(txt.replace('RADAR INDICATED', '')):
+        return 1
+    if RADAR.search(txt):
+        return 0
+    return None
 
 
 def fetch(pil, a, b):
@@ -39,13 +65,20 @@ def parse(text, year, ev):
         vs = list(VTEC.finditer(seg))
         if not vs:
             continue
-        tags = {(m.group(1), m.group(2)) for m in TAG.finditer(seg.upper())}
+        up = seg.upper()
+        tags = {(m.group(1), m.group(2)) for m in TAG.finditer(up)}
+        old = None
         for v in vs:
             ph = v.group(3)
             want = {'TO': ('TORNADO',), 'SV': ('HAIL THREAT', 'WIND THREAT'), 'FF': ('FLASH FLOOD',)}[ph]
             seen = [s for t, s in tags if t in want]
             if not seen:
-                continue
+                if old is None:
+                    old = human_or_radar(up)
+                    old = -1 if old is None else old
+                if old < 0:
+                    continue
+                seen = ['OBSERVED' if old else 'RADAR INDICATED']
             yr = 2000 + int(v.group(5)[:2]) if v.group(5) != '000000T0000Z' else year
             k = f'{v.group(2)[-3:]}|{ph}|{int(v.group(4))}|{yr}'
             ev[k] = max(ev.get(k, 0), 1 if 'OBSERVED' in seen else 0)
