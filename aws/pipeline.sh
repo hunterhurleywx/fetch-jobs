@@ -4,6 +4,8 @@
 # Env: DATE, LEADS ("8 7 ... 1"), CAM_RUNS, EC_CIN (1/0), ADDONS (1/0), R2_* (cache), POGS_CACHE, POGS_CASES.
 # Run from the repo root. Each step logs to cases/$DATE/logs/; the step list and timings go to stdout.
 set -uo pipefail
+# experimental snowfall-total test run (Probability of Blizzard Conditions project): CAM_RUNS=snow, LEADS=window
+if [ "${CAM_RUNS:-}" = "snow" ]; then exec bash aws/snow_pipeline.sh; fi
 N=$(nproc)
 D="$DATE"
 L="cases/$D/logs"

@@ -26,6 +26,7 @@
 !/nam_signal.py
 !/sfc_fields.py
 !/aws/
+!/snow/
 !/consistency_blend.py
 !/redraw_latest.py
 !/bust_summary.py
