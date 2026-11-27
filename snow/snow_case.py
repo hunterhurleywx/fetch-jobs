@@ -470,8 +470,9 @@ def fetch_main(a):
             meta["missing"].append(f"{m}|{i}|{mem}")
             continue
         if m in ("hres", "eps", "aifs"):
-            tp = {(0, h): byh[h]["tp"] * 1000 for h in hours if "tp" in byh[h]}
-            sf = {(0, h): byh[h]["sf"] * 1000 for h in hours if "sf" in byh[h]}
+            k = 1.0 if m == "aifs" else 1000.0  # IFS tp/sf in m; AIFS in kg m-2 (= mm)
+            tp = {(0, h): byh[h]["tp"] * k for h in hours if "tp" in byh[h]}
+            sf = {(0, h): byh[h]["sf"] * k for h in hours if "sf" in byh[h]}
             q = increments(tp, hours, "tp")
             s = increments(sf, hours, "sf")
             if any(x is None for x in q + s):
