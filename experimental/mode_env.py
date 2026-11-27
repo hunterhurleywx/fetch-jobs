@@ -45,7 +45,21 @@ import scoring  # noqa: E402
 from config import CASES_DIR, EPS_MEMBERS, GEFS_MEMBERS, POOL_CYCLES, REFS_MEMBERS, UA_SET, fh_available  # noqa: E402
 
 ramp = scoring.ramp
-MODELS = ("gfs", "gefs", "hres", "eps", "nam12", "rrfs", "nam", "hrrr", "rap", "refs")
+# v2 (POGS_MODE_V2=1; research/39_storm_mode, Hunter 27 Nov 2026; display only, untested):
+#   M3 boundary search 26-42N, 105-80W (was 28-42N, 105-92W / -90W): the Southeast gets its own boundary;
+#   M1 the boundary-relative (Dial) classes apply only inside the boundary band G_w (-50..+150 km); elsewhere the
+#      climatological prior (point shear/SRH do not separate supercell from QLCS: Thompson 2012);
+#   M9 cool season (Nov-Mar): low MLCAPE moves supercell share to linear (Thompson 2012 winter split);
+#   M8 the pooled shares are blended with the prior by lead (more at long range).
+V2 = os.environ.get("POGS_MODE_V2", "") == "1"
+ROW_S, LON_E_LINE, LON_E_FRONT = (26, -80, -80) if V2 else (28, -92, -90)
+# prior shares (discrete, semi-discrete, linear, disorganized): cool-season Southeast organized-severe mix, set from the
+# full-text-checked climatology in research/39_storm_mode/00_literature.md (see PRIOR_SRC)
+PRIOR = np.array([0.19, 0.28, 0.28, 0.25])
+PRIOR_SRC = ("NDJF tornado mode mix discrete 19 / cluster 25 / cell-in-line 28 / QLCS 27 % (research/39 full-text table); "
+             "cell-in-line -> semi-discrete/embedded, cluster -> disorganized/cluster")
+COOL = (11, 12, 1, 2, 3)
+MODELS =("gfs", "gefs", "hres", "eps", "nam12", "rrfs", "nam", "hrrr", "rap", "refs")
 REGIONAL = {"nam12", "rrfs", "nam", "hrrr", "rap", "refs"}
 CAM_ADD = {"hrrr": "hrrr_add", "nam": "nam_add", "rap": "rap_add", "nam12": "nam12_add"}
 HOURS = (18, 21, 24, 27, 30)
@@ -73,6 +87,10 @@ def load_fields(m, init, fh, mem):
         return None
     out = {k: f[k].astype(float) for k in ("u10", "v10", "u850", "v850", "u500", "v500")}
     out["q2"] = np.asarray(q, float)
+    if "cape90" in f:  # GFS 90-0 hPa layer CAPE ~ mixed-layer; MU-type CAPE (GEFS 180-0, ECMWF MUCAPE) scaled 0.7
+        out["cape"] = f["cape90"].astype(float)
+    elif "cape180" in f or "capemu" in f:
+        out["cape"] = 0.7 * f.get("cape180", f.get("capemu")).astype(float)
     shp = out["u10"].shape
     if m in UA_SET:
         ua = fetch.read_cached(UA_SET[m], init, fh, mem if m in ("gefs", "eps") else "det")
@@ -98,8 +116,8 @@ def find_line(q):
     gy, gx = np.gradient(qs)
     dx = DY * np.cos(np.deg2rad(LAT))
     G = 100.0 * np.hypot(gy / DY, gx / dx)  # g/kg per 100 km
-    rows = [i for i in range(LAT.shape[0]) if 28 <= LAT[i, 0] <= 42]
-    cols = np.where((LON[0] >= -105) & (LON[0] <= -92))[0]
+    rows = [i for i in range(LAT.shape[0]) if ROW_S <= LAT[i, 0] <= 42]
+    cols = np.where((LON[0] >= -105) & (LON[0] <= LON_E_LINE))[0]
     pts = {}
     for i in rows:
         g = np.where(gx[i, cols] > 0, G[i, cols], 0)
@@ -128,8 +146,8 @@ def find_front(fl):
     div = np.gradient(u, axis=1) / dx + np.gradient(v, axis=0) / (DY * 1000)
     conv = -ndimage.gaussian_filter(div, 0.75)
     ang = np.degrees(np.arctan2(v, u))
-    rows = [i for i in range(LAT.shape[0]) if 28 <= LAT[i, 0] <= 42]
-    cols = np.where((LON[0] >= -105) & (LON[0] <= -90))[0]
+    rows = [i for i in range(LAT.shape[0]) if ROW_S <= LAT[i, 0] <= 42]
+    cols = np.where((LON[0] >= -105) & (LON[0] <= LON_E_FRONT))[0]
     pts = {}
     for i in rows:
         best, bj = 0.0, None
@@ -202,6 +220,10 @@ def mode_at(fl, line, nrm, cn):
     Gw = np.where((d >= 0) & (d <= 100), 1.0, 0.0)
     Gw = np.where((d > 100) & (d <= 150), 1 - (d - 100) / 50, Gw)
     Gw = np.where((d >= -50) & (d < 0), 1 + d / 50, Gw)
+    if V2:  # Dial counted storms starting within 40 km of the boundary; + position error: 1 to 60 km, 0 by 100 km
+        Gw = np.where((d >= 0) & (d <= 60), 1.0, 0.0)
+        Gw = np.where((d > 60) & (d <= 100), 1 - (d - 60) / 40, Gw)
+        Gw = np.where((d >= -40) & (d < 0), 1 + d / 40, Gw)
     far = np.hypot(dxkm, dykm) > 500  # > 500 km from any boundary: mode unknown, excluded (was 0.5 = "semi" beyond 300 km)
     has_cl = "u700" in fl and "u300" in fl
     if has_cl:
@@ -221,6 +243,14 @@ def mode_at(fl, line, nrm, cn):
     disc, lin = O * np.maximum(0, 2 * D - 1), O * np.maximum(0, 1 - 2 * D)
     shares = np.stack([disc, O - disc - lin, lin, 1 - O])
     shares = np.where(np.isfinite(D)[None], shares, np.nan)
+    if V2:
+        g = np.where(far, 0.0, Gw)[None]
+        shares = g * np.nan_to_num(shares) + (1 - g) * PRIOR[:, None, None]
+        if fl.get("month") in COOL and "cape" in fl:
+            low = 1 - ramp(np.nan_to_num(fl["cape"]), 300, 900)  # NDJF SBCAPE QLCS 299 vs discrete 899 (Childs 2018)
+            mv = 0.5 * low * (shares[0] + shares[1])
+            f0 = shares[0] / np.maximum(shares[0] + shares[1], 1e-9)
+            shares = np.stack([shares[0] - mv * f0, shares[1] - mv * (1 - f0), shares[2] + mv, shares[3]])
     s3 = fl.get("u700", fl["u850"]) - fl["u10"], fl.get("v700", fl["v850"]) - fl["v10"]
     qlcs_n = np.abs(s3[0] * nE + s3[1] * nN)
     return shares, dict(D=D, Gw=Gw, qlcs_n=qlcs_n, has_cl=has_cl)
@@ -281,13 +311,14 @@ def main():
                             if len(cn) >= 5:  # 5-point running mean along the line
                                 rs = sorted(cn)
                                 cn = {r: float(np.mean([cn[x] for x in rs if abs(x - r) <= 2])) for r in rs}
+                        fl["month"] = (conv + timedelta(hours=h)).month
                         r = mode_at(fl, line, nrm, cn)
                         if r is None:
                             continue
                         shares, dg = r
                         bl = [wblk[b] for b in BLOCK_OF[h] if b in wblk]
                         w = np.mean(bl, axis=0) if bl else np.ones(LAT.shape)
-                        known = np.isfinite(dg["D"])
+                        known = np.isfinite(dg["D"]) if not V2 else np.isfinite(shares).all(axis=0)
                         w = np.where(known, w, 0.0)
                         acc = acc + w * np.nan_to_num(shares)
                         acc_w = acc_w + w
@@ -306,18 +337,23 @@ def main():
                 print(f"lead {L} {m}: no usable boundary")
                 continue
             sh = acc / np.maximum(acc_w, 1e-6)
+            a8 = min(0.5, 0.08 * L) if V2 else 0.0  # M8: lean on the prior at long range
+            sh = (1 - a8) * sh + a8 * PRIOR[:, None, None]
             save[f"{L}|{m}|shares"] = np.where(us, sh, 0).astype(np.float16)
             save[f"{L}|{m}|D"] = np.where(us, accD / np.maximum(acc_w, 1e-6), np.nan).astype(np.float16)
             save[f"{L}|{m}|qlcs_n"] = np.where(us, accQ / np.maximum(acc_w, 1e-6), np.nan).astype(np.float16)
             save[f"{L}|{m}|n"] = np.array([n_used, n_cl], np.int32)
             for h, (sa, sk) in per_h.items():  # the environment's mode at that hour (not weighted by storm chances)
-                save[f"{L}|{m}|shares_h{h % 24:02d}"] = np.where(us & (sk > 0), sa / np.maximum(sk, 1e-6), np.nan).astype(np.float16)
+                hs = sa / np.maximum(sk, 1e-6)
+                hs = (1 - a8) * hs + a8 * PRIOR[:, None, None]
+                save[f"{L}|{m}|shares_h{h % 24:02d}"] = np.where(us & (sk > 0), hs, np.nan).astype(np.float16)
             print("   cold-front share of boundary rows per hour: "
                   + ", ".join(f"{h % 24:02d}Z {ncf[h] / max(nrw[h], 1):.2f}" for h in sorted(ncf)), flush=True)
             i, j = int(round((35.5 - 20) / .5)), int(round((-97.5 + 130) / .5))
             print(f"lead {L} {m}: {n_used} member-times ({n_cl} with 700/300 hPa winds); OKC shares "
                   f"disc {sh[0, i, j]:.2f} semi {sh[1, i, j]:.2f} lin {sh[2, i, j]:.2f} disorg {sh[3, i, j]:.2f}", flush=True)
-    p = os.path.join(out_dir, f"mode_env_{a.date}.npz")
+    save["meta_v2"] = np.array([int(V2)], np.int32)
+    p = os.path.join(out_dir, f"mode_env_{a.date}{'_v2' if V2 else ''}.npz")
     np.savez_compressed(p, **save)
     print("->", p)
 
