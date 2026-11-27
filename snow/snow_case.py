@@ -404,7 +404,12 @@ def increments(acc, hours, var):
     """Per-interval increments of an accumulation from messages acc[(a, b)] (any bucket convention)."""
     inc = []
     for h0, h1 in zip(hours[:-1], hours[1:]):
-        v = acc.get((h0, h1))
+        # prefer differencing the run total (0-h): RAP's extra 3-h "bucket" APCP is not total precipitation
+        v = acc[(0, h1)] - acc[(0, h0)] if (0, h1) in acc and (0, h0) in acc else None
+        if v is None and h0 == 0 and (0, h1) in acc:
+            v = acc[(0, h1)]
+        if v is None:
+            v = acc.get((h0, h1))
         if v is None:
             for (a, b), x in acc.items():
                 if b == h1 and (a, h0) in acc:
