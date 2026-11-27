@@ -33,6 +33,7 @@ LAT2, LON2 = np.meshgrid(LATS, LONS, indexing="ij")
 AGL = [300, 600, 900, 1200, 1500, 1800, 2100, 2400]          # Pletcher 2026 feature levels
 PRS_FULL = [1000, 950, 925, 900, 850, 800, 750, 700]        # T, Z, RH, U, V
 PRS_T = [600, 500]                                          # T only (Kuchera / MaxTAloft)
+STEP = {"aifs": 6}                                          # output interval (h) where not 3-hourly
 
 GFS = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
 GEFS = "https://noaa-gefs-pds.s3.amazonaws.com"
@@ -138,21 +139,34 @@ def ncep_lines(idx_text):
     return out
 
 
+def span(desc, kind):
+    """'0-12 hour acc fcst' -> (0, 12); wgrib2 writes whole days as '0-1 day acc fcst' -> (0, 24)."""
+    m = re.match(rf"(\d+)-(\d+) (hour|day) {kind} fcst$", desc)
+    if not m:
+        return None
+    k = 24 if m.group(3) == "day" else 1
+    return int(m.group(1)) * k, int(m.group(2)) * k
+
+
 def pick_ncep(lines, fh, want_prs, want_t, ens_tag=None):
     """Byte ranges for one NCEP file at hour fh: accumulations (APCP/ASNOW, any a-b), CSNOW (inst or ave), levels."""
     inst = f"{fh} hour fcst"
+    insts = {inst} | ({f"{fh // 24} day fcst"} if fh and fh % 24 == 0 else set())
     sel = {}
     for var, lev, desc, extra, s, e in lines:
         if ens_tag is not None and extra and not extra.startswith(ens_tag):
             continue
-        m = re.match(r"(\d+)-(\d+) hour acc fcst$", desc)
-        if var in ("APCP", "ASNOW") and lev == "surface" and m and int(m.group(2)) == fh:
-            sel.setdefault(f"acc|{var}|{m.group(1)}|{fh}", (s, e))
+        acc = span(desc, "acc")
+        if desc in insts:
+            desc = inst
+        if var in ("APCP", "ASNOW") and lev == "surface" and acc and acc[1] == fh:
+            sel.setdefault(f"acc|{var}|{acc[0]}|{fh}", (s, e))
         elif var == "CSNOW" and lev == "surface":
+            ave = span(desc, "ave")
             if desc == inst:
                 sel.setdefault("csnow_inst", (s, e))
-            elif re.match(rf"\d+-{fh} hour ave fcst$", desc):
-                a = int(desc.split("-")[0])
+            elif ave and ave[1] == fh:
+                a = ave[0]
                 if "csnow_ave" not in sel or a > sel["csnow_ave_a"][0]:
                     sel["csnow_ave"] = (s, e)
                     sel["csnow_ave_a"] = (a, a)
@@ -379,7 +393,7 @@ def plan(start, end, last_ncep, last_ec):
     for m, runs in p.items():
         for i in runs:
             h0 = int((start - i).total_seconds() // 3600)
-            for fh in range(h0, h0 + span + 1, 3):
+            for fh in range(h0, h0 + span + 1, STEP.get(m, 3)):
                 for mem in mems.get(m, [None]):
                     tasks.append((m, f"{i:%Y%m%d%H}", fh, mem))
     return p, tasks
@@ -387,7 +401,7 @@ def plan(start, end, last_ncep, last_ec):
 
 # ---------------------------------------------------------------------------------------------- assembly
 def increments(acc, hours, var):
-    """3-h increments of an accumulation from messages acc[(a, b)] (any bucket convention)."""
+    """Per-interval increments of an accumulation from messages acc[(a, b)] (any bucket convention)."""
     inc = []
     for h0, h1 in zip(hours[:-1], hours[1:]):
         v = acc.get((h0, h1))
@@ -446,7 +460,7 @@ def fetch_main(a):
     for (m, i, mem), byh in sorted(store.items()):
         init = datetime.strptime(i, "%Y%m%d%H")
         h0 = int((start - init).total_seconds() // 3600)
-        hours = list(range(h0, h0 + span + 1, 3))
+        hours = list(range(h0, h0 + span + 1, STEP.get(m, 3)))
         if any(h not in byh or "_missing" in byh[h] for h in hours):
             meta["missing"].append(f"{m}|{i}|{mem}")
             continue
@@ -535,7 +549,7 @@ def extras(a):
         except Missing:
             ok = False; break
         hit = [(s, e) for var, lev, desc, extra, s, e in lines
-               if var == "ASNOW" and desc == f"{h - 6}-{h} hour acc fcst" and extra == ""]
+               if var == "ASNOW" and span(desc, "acc") == (h - 6, h) and extra == ""]
         if not hit:
             ok = False; break
         tot = tot + _decode(get(url, hit[0]))
