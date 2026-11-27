@@ -156,7 +156,7 @@ def pick_ncep(lines, fh, want_prs, want_t, ens_tag=None):
                 if "csnow_ave" not in sel or a > sel["csnow_ave_a"][0]:
                     sel["csnow_ave"] = (s, e)
                     sel["csnow_ave_a"] = (a, a)
-        elif desc == inst and lev.endswith(" mb"):
+        elif desc == inst and re.fullmatch(r"\d+ mb", lev):  # skip layers such as "500-1000 mb"
             p = int(lev.split()[0])
             if (var in ("TMP", "HGT", "RH", "UGRD", "VGRD") and p in want_prs) or (var == "TMP" and p in want_t):
                 sel.setdefault(f"{var}{p}", (s, e))
@@ -565,23 +565,26 @@ def finish(a):
         print("no slr_rf.npz: Pletcher methods skipped", flush=True)
         return
     r = np.load(p)
-    sw = np.load(os.path.join(a.out, "snow_water.npz"))
+    sw = dict(np.load(os.path.join(a.out, "snow_water.npz")))  # load every array once (npz reads lazily)
     feats = np.load(os.path.join(a.out, "slr_features.npz"))
     keys, ids = list(feats["keys"]), feats["ids"]
     mem = dict(np.load(os.path.join(a.out, "snow_members.npz")))
+    order = np.argsort(ids[:, 0], kind="stable")
+    bounds = np.searchsorted(ids[order, 0], np.arange(len(keys) + 1))
     for meth in ("rf", "lr"):
         if meth not in r.files:
             continue
         slr = r[meth]
-        acc = {}
-        for kid, k, cell, s in zip(ids[:, 0], ids[:, 1], ids[:, 2], slr):
-            key = keys[kid]
-            if key not in acc:
-                acc[key] = np.zeros(NY * NX, np.float32)
-            acc[key][cell] += sw[key][k].ravel()[cell] * s / 25.4
-        for key, v in acc.items():
-            mem[f"{key}|snow_p{meth}"] = v.reshape(NY, NX)
-        print(f"Pletcher {meth}: {len(acc)} members", flush=True)
+        for kid, key in enumerate(keys):
+            sel = order[bounds[kid]:bounds[kid + 1]]
+            if not len(sel):
+                continue
+            k, cell = ids[sel, 1], ids[sel, 2]
+            w = sw[key].reshape(sw[key].shape[0], -1)[k, cell]  # snow water (mm) of each row
+            tot = np.zeros(NY * NX, np.float64)
+            np.add.at(tot, cell, w * slr[sel] / 25.4)
+            mem[f"{key}|snow_p{meth}"] = tot.reshape(NY, NX).astype(np.float32)
+        print(f"Pletcher {meth}: {len(keys)} members", flush=True)
     np.savez_compressed(os.path.join(a.out, "snow_members.npz"), **mem)
 
 

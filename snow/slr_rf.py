@@ -2,7 +2,7 @@
 
   python snow/slr_rf.py --repo /opt/utahrfslr --out DIR
 
-Runs in its own Python 3.11 venv (the pickles need scikit-learn 1.2.2). Reads DIR/slr_features.npz (X: rows x 27 in
+Runs in its own venv (aws/snow_pipeline.sh picks a scikit-learn version the RF pickle loads with). Reads DIR/slr_features.npz (X: rows x 27 in
 model_keys order SPD03K..24K, T03K..24K, R03K..24K, elev, lat, lon; our T in K, RH %, wind m/s, lon negative), checks
 the training units against the repo's HRRR testing set, converts if needed, writes DIR/slr_rf.npz {rf, lr}.
 """
