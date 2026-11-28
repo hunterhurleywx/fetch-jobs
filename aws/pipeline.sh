@@ -32,10 +32,19 @@ step() {  # step <name> <required 1/0> <command...>: time it, keep going on opti
 }
 
 dl() {  # dl <log name> <decode procs> <ncep workers> <ec workers> <models...>
+  # time limit (28 Nov 2026: a CAM download stalled 2.5 h with nothing in the machine log; requests' timeout is per read)
   local log=$1 dp=$2 nw=$3 ew=$4; shift 4
-  python -u download_case.py "$D" --leads $LEADS --models "$@" --ncep-workers $nw --ec-workers $ew --decode-procs $dp \
+  timeout --kill-after=60 "${DL_TIMEOUT:-2700}" \
+    python -u download_case.py "$D" --leads $LEADS --models "$@" --ncep-workers $nw --ec-workers $ew --decode-procs $dp \
     > "$L/download_$log.log" 2>&1
-  local s=$?; tail -n 3 "$L/download_$log.log"; return $s
+  local s=$?; [ $s -eq 124 ] && echo "!!! download $log hit the ${DL_TIMEOUT:-2700} s limit"
+  tail -n 3 "$L/download_$log.log"; return $s
+}
+
+progress() {  # progress <log names...>: every 2 min, the last line of each download log into the machine log
+  while sleep 120; do
+    for g in "$@"; do [ -f "$L/download_$g.log" ] && echo "  [$(date -u +%H:%MZ) $g] $(tail -n 1 "$L/download_$g.log" | cut -c1-180)"; done
+  done
 }
 
 # decode processes per pass, as shares of the machine (64 cores: main 32, x 16; then UA 24, add 12, EPS add 24)
@@ -46,9 +55,11 @@ step "SPC outlooks, discussions and reports" 1 python -u fetch_spc.py "$D"
 step "pull decoded fields from R2" 1 python -u r2_cache.py pull "$D" --leads $LEADS --models $MAIN_MODELS $X_MODELS $UA_MODELS $ADD $PCL_MODELS
 
 main_and_x() {
+  progress main x & local pp=$!
   dl main $(q 32) 128 32 $MAIN_MODELS & local p1=$!
   dl x $(q 16) 64 24 $X_MODELS & local p2=$!
   wait $p1; local s1=$?; wait $p2; local s2=$?
+  kill $pp 2>/dev/null
   return $(( s1 || s2 ))
 }
 step "main fields + CI extras (side by side)" 1 main_and_x
@@ -56,6 +67,7 @@ step "push main/x to R2" 1 python -u r2_cache.py push "$D" --leads $LEADS --mode
 
 # upper air, add-ons and EPS add-ons are independent cache sets: run all three at once
 extras() {
+  progress ua add eps_add & local pp=$!
   dl ua $(q 24) 96 24 $UA_MODELS & local p1=$!
   local p2="" p3=""
   if [ "${ADDONS:-1}" != "0" ]; then
@@ -66,6 +78,7 @@ extras() {
   wait $p1 || s=1
   [ -n "$p2" ] && { wait $p2 || s=1; }
   [ -n "$p3" ] && { wait $p3 || s=1; }
+  kill $pp 2>/dev/null
   return $s
 }
 step "upper air + add-ons + EPS add-ons (side by side)" 0 extras
